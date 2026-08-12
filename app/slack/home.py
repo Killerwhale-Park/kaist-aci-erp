@@ -1,0 +1,167 @@
+from app.db.enums import EvidenceSubmissionStatus, EvidenceTiming, RequestStatus, UserRole
+from app.db.models import BudgetProgram, ExpenseRequest, UserProfile
+from app.i18n import t
+from app.slack.messages import status_text
+from app.slack.utils import escape_mrkdwn
+
+
+def app_home_view(
+    profile: UserProfile,
+    budgets: list[BudgetProgram],
+    own_requests: list[ExpenseRequest],
+    pending_approvals: list[ExpenseRequest],
+) -> dict:
+    blocks: list[dict] = [
+        {"type": "header", "text": {"type": "plain_text", "text": t("app_title")}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "new_expense_request",
+                    "style": "primary",
+                    "text": {"type": "plain_text", "text": f"+ {t('new_request')}"},
+                    "value": "new",
+                }
+            ],
+        },
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{t('available_programs')}*"}},
+    ]
+    for budget in budgets:
+        text = f"*{escape_mrkdwn(budget.name_en)} / {escape_mrkdwn(budget.name_ko)}*"
+        if budget.is_available:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": text},
+                    "accessory": {
+                        "type": "button",
+                        "action_id": "new_expense_request",
+                        "text": {"type": "plain_text", "text": t("open")},
+                        "value": budget.id,
+                    },
+                }
+            )
+        else:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"{text}\n_{t('coming_soon')}_"},
+                }
+            )
+
+    blocks.extend(
+        [
+            {"type": "divider"},
+            {"type": "section", "text": {"type": "mrkdwn", "text": f"*{t('my_requests')}*"}},
+        ]
+    )
+    if not own_requests:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": t("no_requests")}})
+    for request in own_requests:
+        category_name = (
+            f"{escape_mrkdwn(request.category.name_en)} / {escape_mrkdwn(request.category.name_ko)}"
+        )
+        actions = [
+            {
+                "type": "button",
+                "action_id": "view_request",
+                "text": {"type": "plain_text", "text": t("view")},
+                "value": str(request.id),
+            }
+        ]
+        if request.status == RequestStatus.CHANGES_REQUESTED:
+            actions.append(
+                {
+                    "type": "button",
+                    "action_id": "edit_request",
+                    "text": {"type": "plain_text", "text": t("edit_request")},
+                    "value": str(request.id),
+                }
+            )
+        has_missing_post_evidence = any(
+            evidence.timing == EvidenceTiming.POST
+            and evidence.status == EvidenceSubmissionStatus.MISSING
+            for evidence in request.evidence_submissions
+        )
+        if (
+            request.status
+            in {
+                RequestStatus.APPROVED_PENDING_POST_EVIDENCE,
+                RequestStatus.COMPLETED,
+            }
+            and has_missing_post_evidence
+        ):
+            actions.append(
+                {
+                    "type": "button",
+                    "action_id": "add_post_evidence",
+                    "text": {"type": "plain_text", "text": t("submit_post_evidence")},
+                    "value": str(request.id),
+                }
+            )
+        blocks.extend(
+            [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*{request.reference_number}*\n"
+                            f"{category_name}\n"
+                            f"{status_text(request.status)}"
+                        ),
+                    },
+                },
+                {"type": "actions", "elements": actions},
+            ]
+        )
+
+    if pending_approvals:
+        blocks.extend(
+            [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{t('pending_approvals')}*"},
+                },
+            ]
+        )
+        for request in pending_approvals[:10]:
+            pending_text = (
+                f"*{request.reference_number}* — {escape_mrkdwn(request.category.name_en)}"
+            )
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": pending_text,
+                    },
+                    "accessory": {
+                        "type": "button",
+                        "action_id": "view_request",
+                        "text": {"type": "plain_text", "text": t("view")},
+                        "value": str(request.id),
+                    },
+                }
+            )
+
+    if profile.role == UserRole.SYSTEM_ADMIN:
+        blocks.extend(
+            [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{t('system_administration')}*"},
+                    "accessory": {
+                        "type": "button",
+                        "action_id": "manage_rules",
+                        "text": {"type": "plain_text", "text": t("manage_rules")},
+                        "value": "rules",
+                    },
+                },
+            ]
+        )
+    return {"type": "home", "blocks": blocks[:100]}
