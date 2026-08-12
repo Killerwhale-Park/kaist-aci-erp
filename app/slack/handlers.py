@@ -8,10 +8,14 @@ from slack_sdk.errors import SlackApiError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.approvals.configuration import (
+    ApprovalConfigurationService,
+    ApprovalStepConfiguration,
+)
 from app.approvals.resolver import ApprovalRuleResolver
 from app.approvals.service import ApprovalService
 from app.config.settings import Settings
-from app.db.enums import ApplicantType, ApproverType, RequestStatus, UserRole
+from app.db.enums import ApplicantType, RequestStatus, UserRole
 from app.db.models import BudgetProgram, Department, ExpenseCategory, UserProfile
 from app.db.repository import ExpenseRequestRepository
 from app.exceptions import (
@@ -35,13 +39,16 @@ from app.slack.messages import request_fallback_text, request_message_blocks
 from app.slack.modals import (
     administration_modal,
     approval_decision_modal,
+    approval_rule_editor_modal,
+    approval_rule_selector_modal,
     edit_expense_modal,
     expense_context_modal,
     expense_details_modal,
     post_evidence_modal,
     request_details_modal,
+    system_admins_modal,
 )
-from app.slack.utils import state_value
+from app.slack.utils import state_selected_users, state_value
 from app.users.service import UserProfileService
 
 logger = logging.getLogger(__name__)
@@ -165,13 +172,16 @@ def register_handlers(
             applicant = request.applicant_slack_user_id
             reference = request.reference_number
             status = request.status
-            current_step = None
+            current_approver_ids: list[str] = []
             if status == RequestStatus.IN_APPROVAL:
                 current_step = next(
                     step
                     for step in request.approval_steps
                     if step.step_order == request.current_step_order
                 )
+                current_approver_ids = [
+                    approver.slack_user_id for approver in current_step.approvers
+                ]
         if status == RequestStatus.CHANGES_REQUESTED:
             text = t("changes_requested_notice", reference=reference, reason=reason or "-")
             blocks = [
@@ -221,10 +231,10 @@ def register_handlers(
             await safe_dm(client, applicant, t("completed_notice", reference=reference))
             return
         await safe_dm(client, applicant, t("request_updated", reference=reference))
-        if current_step and current_step.approver_type == ApproverType.SLACK_USER:
+        for approver_id in current_approver_ids:
             await safe_dm(
                 client,
-                current_step.approver_reference,
+                approver_id,
                 t("next_review_notice", reference=reference),
             )
 
@@ -266,6 +276,50 @@ def register_handlers(
             evidence_folder_url=state_value(state, "evidence_folder"),
             evidence=evidence_from_state(state),
         )
+
+    def approval_step_drafts(state: dict[str, Any]) -> list[dict]:
+        indexes = sorted(
+            int(block_id.removeprefix("step_name_en__"))
+            for block_id in state.get("values", {})
+            if block_id.startswith("step_name_en__")
+        )
+        return [
+            {
+                "name_en": state_value(state, f"step_name_en__{index}") or "",
+                "name_ko": state_value(state, f"step_name_ko__{index}") or "",
+                "approver_slack_user_ids": state_selected_users(state, f"step_approvers__{index}"),
+            }
+            for index in indexes
+        ]
+
+    async def approval_channel_accepts_configuration(
+        client, channel_id: str, steps: list[dict]
+    ) -> bool:
+        try:
+            channel_response = await client.conversations_info(channel=channel_id)
+            channel = channel_response["channel"]
+            if not channel.get("is_private") or not channel.get("is_member"):
+                return False
+
+            member_ids: set[str] = set()
+            cursor: str | None = None
+            while True:
+                response = await client.conversations_members(
+                    channel=channel_id,
+                    limit=200,
+                    **({"cursor": cursor} if cursor else {}),
+                )
+                member_ids.update(response.get("members", []))
+                cursor = response.get("response_metadata", {}).get("next_cursor") or None
+                if not cursor:
+                    break
+            selected_approvers = {
+                slack_user_id for step in steps for slack_user_id in step["approver_slack_user_ids"]
+            }
+            return selected_approvers.issubset(member_ids)
+        except SlackApiError:
+            logger.exception("Failed to validate approval channel membership")
+            return False
 
     def pydantic_errors(error: ValidationError) -> dict[str, str]:
         errors: dict[str, str] = {}
@@ -612,3 +666,188 @@ def register_handlers(
                 await safe_dm(client, actor, t("unauthorized"))
                 return
         await client.views_open(trigger_id=body["trigger_id"], view=administration_modal())
+
+    @slack_app.action("configure_approval_rules")
+    async def configure_approval_rules_action(ack, body, client):
+        await ack()
+        actor = body["user"]["id"]
+        with session_context() as session:
+            service = ApprovalConfigurationService(session)
+            try:
+                service.assert_system_admin(actor)
+            except ApprovalPermissionError:
+                await safe_dm(client, actor, t("unauthorized"))
+                return
+            departments = list(
+                session.scalars(
+                    select(Department).where(Department.is_active.is_(True)).order_by(Department.id)
+                )
+            )
+            categories = list(
+                session.scalars(
+                    select(ExpenseCategory)
+                    .where(ExpenseCategory.is_active.is_(True))
+                    .order_by(ExpenseCategory.id)
+                )
+            )
+            view = approval_rule_selector_modal(departments, categories)
+        await client.views_push(trigger_id=body["trigger_id"], view=view)
+
+    @slack_app.view("approval_rule_selector")
+    async def submit_approval_rule_selector(ack, body):
+        actor = body["user"]["id"]
+        state = body["view"]["state"]
+        department_id = state_value(state, "rule_department")
+        category_id = state_value(state, "rule_category")
+        try:
+            with session_context() as session:
+                service = ApprovalConfigurationService(session)
+                service.assert_system_admin(actor)
+                rule = service.get_rule(department_id, category_id)
+                department = session.get(Department, department_id)
+                steps = [
+                    {
+                        "name_en": step.name_en,
+                        "name_ko": step.name_ko,
+                        "approver_slack_user_ids": [
+                            approver.slack_user_id for approver in step.approvers
+                        ],
+                    }
+                    for step in rule.workflow.steps
+                ]
+                view = approval_rule_editor_modal(
+                    department_id,
+                    category_id,
+                    department.approval_channel_id,
+                    steps,
+                )
+            await ack(response_action="update", view=view)
+        except (ApprovalPermissionError, EntityNotFoundError):
+            await ack(
+                response_action="errors",
+                errors={"rule_category": t("configuration_error")},
+            )
+
+    async def update_approval_step_editor(ack, body, client, operation: str) -> None:
+        await ack()
+        actor = body["user"]["id"]
+        metadata = json.loads(body["view"]["private_metadata"])
+        state = body["view"]["state"]
+        with session_context() as session:
+            try:
+                ApprovalConfigurationService(session).assert_system_admin(actor)
+            except ApprovalPermissionError:
+                await safe_dm(client, actor, t("unauthorized"))
+                return
+
+        steps = approval_step_drafts(state)
+        if operation == "add" and len(steps) < 20:
+            next_order = len(steps) + 1
+            steps.append(
+                {
+                    "name_en": f"Approval Step {next_order}",
+                    "name_ko": f"승인 단계 {next_order}",
+                    "approver_slack_user_ids": [],
+                }
+            )
+        if operation == "remove" and len(steps) > 1:
+            remove_index = int(body["actions"][0]["value"])
+            steps.pop(remove_index)
+        view = approval_rule_editor_modal(
+            metadata["department_id"],
+            metadata["category_id"],
+            state_value(state, "approval_channel"),
+            steps,
+        )
+        await client.views_update(
+            view_id=body["view"]["id"],
+            hash=body["view"]["hash"],
+            view=view,
+        )
+
+    @slack_app.action("add_approval_step")
+    async def add_approval_step_action(ack, body, client):
+        await update_approval_step_editor(ack, body, client, "add")
+
+    @slack_app.action("remove_approval_step")
+    async def remove_approval_step_action(ack, body, client):
+        await update_approval_step_editor(ack, body, client, "remove")
+
+    @slack_app.view("approval_rule_editor")
+    async def submit_approval_rule_editor(ack, body, client):
+        await ack()
+        actor = body["user"]["id"]
+        metadata = json.loads(body["view"]["private_metadata"])
+        state = body["view"]["state"]
+        channel_id = state_value(state, "approval_channel")
+        steps = approval_step_drafts(state)
+        if not channel_id or not await approval_channel_accepts_configuration(
+            client, channel_id, steps
+        ):
+            await safe_dm(client, actor, t("channel_membership_error"))
+            return
+
+        try:
+            with session_context() as session:
+                ApprovalConfigurationService(session).save_rule(
+                    actor_slack_user_id=actor,
+                    department_id=metadata["department_id"],
+                    category_id=metadata["category_id"],
+                    approval_channel_id=channel_id,
+                    steps=[
+                        ApprovalStepConfiguration(
+                            name_en=step["name_en"],
+                            name_ko=step["name_ko"],
+                            approver_slack_user_ids=tuple(step["approver_slack_user_ids"]),
+                        )
+                        for step in steps
+                    ],
+                )
+        except (ApprovalPermissionError, ConfigurationError, EntityNotFoundError):
+            await safe_dm(client, actor, t("configuration_error"))
+            return
+
+        incomplete = any(not step["approver_slack_user_ids"] for step in steps)
+        await safe_dm(
+            client,
+            actor,
+            t("rule_saved_incomplete") if incomplete else t("rule_saved"),
+        )
+        await publish_home(client, actor)
+
+    @slack_app.action("configure_system_admins")
+    async def configure_system_admins_action(ack, body, client):
+        await ack()
+        actor = body["user"]["id"]
+        with session_context() as session:
+            service = ApprovalConfigurationService(session)
+            try:
+                service.assert_system_admin(actor)
+            except ApprovalPermissionError:
+                await safe_dm(client, actor, t("unauthorized"))
+                return
+            view = system_admins_modal(service.system_admin_ids())
+        await client.views_push(trigger_id=body["trigger_id"], view=view)
+
+    @slack_app.view("system_admins_editor")
+    async def submit_system_admins_editor(ack, body, client):
+        selected_admins = state_selected_users(body["view"]["state"], "system_admins")
+        if not selected_admins:
+            await ack(
+                response_action="errors",
+                errors={"system_admins": t("admin_required")},
+            )
+            return
+        actor = body["user"]["id"]
+        try:
+            with session_context() as session:
+                ApprovalConfigurationService(session).replace_system_admins(actor, selected_admins)
+            await ack()
+        except ApprovalPermissionError:
+            await ack(
+                response_action="errors",
+                errors={"system_admins": t("unauthorized")},
+            )
+            return
+        await safe_dm(client, actor, t("admins_saved"))
+        await publish_home(client, actor)

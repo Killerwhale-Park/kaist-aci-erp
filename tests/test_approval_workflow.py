@@ -9,17 +9,16 @@ from app.approvals.service import ApprovalService
 from app.config.settings import Settings
 from app.db.enums import (
     ApprovalStepStatus,
-    ApproverType,
     AuditEventType,
     EvidenceRequirementLevel,
     EvidenceTiming,
     RequestStatus,
-    UserRole,
 )
 from app.db.models import (
     ApprovalActionLog,
     ApprovalRule,
     ApprovalStepDefinition,
+    ApprovalStepDefinitionApprover,
     ApprovalWorkflowDefinition,
     BudgetProgram,
     Department,
@@ -47,8 +46,7 @@ def configure_policy(
     session: Session,
     step_count: int,
     *,
-    approver_type: ApproverType = ApproverType.SLACK_USER,
-    approver_reference: str | None = None,
+    approvers_per_step: dict[int, list[str]] | None = None,
     required_pre: bool = False,
     required_post: bool = False,
     optional_post: bool = False,
@@ -89,20 +87,21 @@ def configure_policy(
     )
     approvers: list[str] = []
     for step_order in range(1, step_count + 1):
-        reference = approver_reference or f"U_APPROVER_{step_order}"
-        approvers.append(reference)
-        session.add(
-            ApprovalStepDefinition(
-                id=f"test_workflow.step_{step_order}",
-                workflow_definition_id="test_workflow",
-                step_order=step_order,
-                name_en=f"Approval Step {step_order}",
-                name_ko=f"승인 단계 {step_order}",
-                approver_type=approver_type,
-                approver_reference=reference,
-                required=True,
-            )
+        step_approvers = (approvers_per_step or {}).get(step_order, [f"U_APPROVER_{step_order}"])
+        approvers.append(step_approvers[0] if step_approvers else "")
+        definition = ApprovalStepDefinition(
+            id=f"test_workflow.step_{step_order}",
+            workflow_definition_id="test_workflow",
+            step_order=step_order,
+            name_en=f"Approval Step {step_order}",
+            name_ko=f"승인 단계 {step_order}",
+            required=True,
         )
+        definition.approvers.extend(
+            ApprovalStepDefinitionApprover(slack_user_id=slack_user_id)
+            for slack_user_id in step_approvers
+        )
+        session.add(definition)
     session.add(
         ApprovalRule(
             id="test_rule",
@@ -236,12 +235,25 @@ def test_unauthorized_user_cannot_change_state(session: Session, settings: Setti
     assert session.scalar(select(func.count()).select_from(ApprovalActionLog)) == audit_count_before
 
 
+def test_any_selected_approver_can_complete_step(session: Session, settings: Settings) -> None:
+    configure_policy(
+        session,
+        1,
+        approvers_per_step={1: ["U_APPROVER_A", "U_APPROVER_B"]},
+    )
+    request = create_request(session, settings)
+
+    ApprovalService(session).approve(request.id, "U_APPROVER_B")
+
+    assert request.status == RequestStatus.COMPLETED
+    assert request.approval_steps[0].acted_by_slack_user_id == "U_APPROVER_B"
+
+
 def test_approver_from_another_department_is_denied(session: Session, settings: Settings) -> None:
     configure_policy(
         session,
         1,
-        approver_type=ApproverType.DEPARTMENT_ROLE,
-        approver_reference=UserRole.APPROVER.value,
+        approvers_per_step={1: ["U_DEPT_A_APPROVER"]},
     )
     session.add_all(
         [
@@ -249,13 +261,13 @@ def test_approver_from_another_department_is_denied(session: Session, settings: 
                 slack_user_id="U_DEPT_A_APPROVER",
                 display_name="Department A Approver",
                 department_id="department_a",
-                role=UserRole.APPROVER,
+                role="APPROVER",
             ),
             UserProfile(
                 slack_user_id="U_DEPT_B_APPROVER",
                 display_name="Department B Approver",
                 department_id="department_b",
-                role=UserRole.APPROVER,
+                role="APPROVER",
             ),
         ]
     )
@@ -379,18 +391,16 @@ def test_workflow_snapshot_is_immutable(session: Session, settings: Settings) ->
     existing_request = create_request(session, settings)
     original_snapshot = list(existing_request.workflow_snapshot)
 
-    session.add(
-        ApprovalStepDefinition(
-            id="test_workflow.step_3",
-            workflow_definition_id="test_workflow",
-            step_order=3,
-            name_en="New Inspection",
-            name_ko="새 검수",
-            approver_type=ApproverType.SLACK_USER,
-            approver_reference="U_NEW_INSPECTOR",
-            required=True,
-        )
+    new_definition = ApprovalStepDefinition(
+        id="test_workflow.step_3",
+        workflow_definition_id="test_workflow",
+        step_order=3,
+        name_en="New Inspection",
+        name_ko="새 검수",
+        required=True,
     )
+    new_definition.approvers.append(ApprovalStepDefinitionApprover(slack_user_id="U_NEW_INSPECTOR"))
+    session.add(new_definition)
     session.commit()
     session.expire_all()
     new_request = create_request(session, settings, applicant="U_SECOND_STUDENT")

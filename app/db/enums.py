@@ -32,6 +32,10 @@ class ApproverType(StrEnum):
     DEPARTMENT_ROLE = "DEPARTMENT_ROLE"
 
 
+class ApprovalPolicy(StrEnum):
+    ANY = "ANY"
+
+
 class ApprovalStepStatus(StrEnum):
     WAITING = "WAITING"
     PENDING = "PENDING"

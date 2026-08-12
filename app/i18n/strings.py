@@ -50,11 +50,47 @@ STRINGS = {
         "이 MVP에서는 승인 규칙과 학과를 DB 설정으로 관리합니다."
     ),
     "manage_rules": "Manage Rules / 규칙 관리",
+    "manage_admins": "Manage Admins / 관리자 설정",
+    "configure_rules": "Approval Rules / 승인 규칙",
+    "admin_menu_notice": (
+        "Only system administrators can change runtime configuration.\n"
+        "시스템 관리자만 실행 중 설정을 변경할 수 있습니다."
+    ),
+    "select_rule": "Select Rule / 규칙 선택",
+    "approval_rule_title": "Approval Rule / 승인 규칙",
+    "approval_channel": "Approval Channel / 승인 채널",
+    "private_channel_only": (
+        "Select a private channel that the app has joined.\n앱이 참여한 비공개 채널을 선택해주세요."
+    ),
+    "step_name_en": "Step Name (English) / 단계명 영문",
+    "step_name_ko": "Step Name (Korean) / 단계명 국문",
+    "step_approvers": "Eligible Approvers / 승인 가능자",
+    "any_approver_notice": (
+        "Any one selected approver can complete the step. Empty steps are saved as incomplete.\n"
+        "선택된 승인자 중 한 명이 처리합니다. 미지정 단계는 설정 미완료로 저장됩니다."
+    ),
+    "add_step": "Add Step / 단계 추가",
+    "remove_step": "Remove / 삭제",
+    "save": "Save / 저장",
+    "rule_saved": "Approval rule saved. / 승인 규칙을 저장했습니다.",
+    "rule_saved_incomplete": (
+        "Approval rule saved as incomplete because one or more steps have no approver.\n"
+        "승인자가 없는 단계가 있어 설정 미완료 상태로 저장했습니다."
+    ),
+    "channel_membership_error": (
+        "The app and every selected approver must be members of the private approval channel.\n"
+        "앱과 선택한 모든 승인자는 비공개 승인 채널의 멤버여야 합니다."
+    ),
+    "admin_title": "System Admins / 관리자",
+    "system_admins": "System Administrators / 시스템 관리자",
+    "admin_required": "Select at least one administrator. / 관리자를 한 명 이상 선택해주세요.",
+    "admins_saved": "System administrators updated. / 시스템 관리자를 변경했습니다.",
     "request_title": "Expense Request {reference}",
     "category": "Category / 지출 항목",
     "status": "Status / 상태",
     "approval_progress": "Approval Progress / 승인 진행",
     "current_reviewer": "Current Reviewer / 현재 검토자",
+    "unassigned": "Unassigned / 미지정",
     "approve": "Approve / 승인",
     "request_changes": "Request Changes / 수정 요청",
     "reject": "Reject / 반려",

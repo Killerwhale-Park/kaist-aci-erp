@@ -14,6 +14,7 @@
 - PRE/POST 및 REQUIRED/OPTIONAL 증빙 정의와 request snapshot
 - Google Drive folder URL 및 개별 evidence URL
 - 학과·예산·카테고리별 generic N-step workflow
+- App Home에서 approval channel, N단계, 복수 승인자를 변경하는 관리자 flow
 - 신청 시점 approval workflow snapshot
 - Slack actor ID 기반 server-side authorization
 - Approve, Request Changes, Reject, 같은 단계부터 Resubmit
@@ -27,7 +28,9 @@
 
 증빙 후보의 실제 필수 여부는 제공된 요구사항만으로 확정할 수 없습니다. 따라서 초기 seed는 모든 증빙 후보를 `OPTIONAL`로 넣습니다. 정책 책임자가 확인한 항목만 `EvidenceRequirementDefinition.requirement`를 `REQUIRED`로 변경한 뒤 운영해야 합니다.
 
-승인선은 동작 예시입니다. Supplies는 Professor → Administration → Inspection, 나머지 카테고리는 Professor → Administration으로 seed됩니다. `.env`의 실제 Slack user ID와 channel ID를 설정하고 대학 정책에 맞게 definition과 rule을 확정해야 합니다. 이미 제출된 신청은 변경 전 snapshot을 유지합니다.
+승인 단계 이름은 동작 예시입니다. Supplies는 Professor → Administration → Inspection, 나머지 카테고리는 Professor → Administration으로 seed되지만, 채널과 승인자는 비어 있습니다. 최초 관리자가 Slack App Home의 관리 flow에서 실제 값을 지정해야 새 신청을 제출할 수 있습니다. 이미 제출된 신청은 변경 전 snapshot을 유지합니다.
+
+한 단계에 승인자를 여러 명 지정하면 그중 한 명의 승인으로 다음 단계로 진행하는 `ANY` 정책을 사용합니다. 승인자가 없는 단계도 임시 저장할 수 있지만 해당 rule은 미완성 상태이며, 그 rule을 사용하는 새 신청은 차단됩니다. 사람이 바뀌면 관리자가 새 rule version을 저장하므로 기존 신청의 승인자는 바뀌지 않습니다.
 
 ## 요구 환경
 
@@ -74,18 +77,21 @@ Slack이 로컬 서버에 접근하려면 ngrok 또는 같은 HTTPS tunnel을 �
 5. Event Subscriptions Request URL도 같은 endpoint로 설정하고 `app_home_opened` bot event를 등록합니다.
 6. `/expense` slash command의 Request URL도 같은 endpoint로 설정합니다.
 7. 앱을 workspace에 설치하고 Bot User OAuth Token과 Signing Secret을 `.env`에 넣습니다.
-8. bot을 네 개의 private approval channel 각각에 초대합니다.
-9. channel ID와 실제 승인자 member ID를 `.env`에 입력한 뒤 DB를 seed합니다.
+8. `.env`의 `BOOTSTRAP_SYSTEM_ADMIN_SLACK_USER_IDS`에 최초 관리자 Slack member ID를 넣고 DB를 seed합니다.
+9. bot을 사용할 private approval channel에 초대합니다.
+10. 최초 관리자가 App Home의 **Manage Approval Rules**에서 학과·카테고리별 채널, 단계, 승인자를 저장합니다.
+11. 관리 flow에서 다른 `SYSTEM_ADMIN`을 지정한 뒤에는 bootstrap 환경 변수가 runtime 권한을 덮어쓰지 않습니다.
 
 ### OAuth scopes
 
 - `commands`: `/expense` command와 app entry point 사용
 - `chat:write`: private approval channel 메시지, 업데이트, ephemeral response, DM
+- `groups:read`: bot이 참여한 private channel의 정보와 멤버를 확인하여 채널·승인자 설정 검증
 - `users:read`: canonical Slack user ID에 연결된 display name 조회
 
 `app_home_opened`, Modal open/update, App Home publish 자체에는 추가 OAuth scope가 필요하지 않습니다. Private channel에는 scope만으로 접근할 수 없으며 bot이 반드시 해당 채널의 멤버여야 합니다.
 
-향후 관리 UI에서 private channel 멤버만 승인자 후보로 조회할 경우 `groups:read`를 추가하고 `conversations.members` 결과를 server-side로 검증해야 합니다. 현재 MVP는 최소 권한을 위해 이 scope와 해당 UI를 포함하지 않습니다.
+관리 화면의 Slack 사용자 selector는 workspace 사용자를 표시합니다. 저장할 때 backend가 `conversations.info`와 `conversations.members`로 채널이 private인지, bot과 지정 승인자 모두 채널 멤버인지 다시 검증합니다. scope를 추가하거나 변경한 경우 앱을 workspace에 다시 설치해야 새 권한이 적용됩니다.
 
 공식 참고 문서:
 
@@ -94,6 +100,7 @@ Slack이 로컬 서버에 접근하려면 ngrok 또는 같은 HTTPS tunnel을 �
 - [App Home](https://docs.slack.dev/surfaces/app-home/)
 - [chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage/)
 - [commands scope](https://docs.slack.dev/reference/scopes/commands/)
+- [groups:read scope](https://docs.slack.dev/reference/scopes/groups.read/)
 
 ## Configuration seed
 
@@ -106,15 +113,29 @@ app/config/categories.py
 app/config/workflows.py
 ```
 
-운영 정책 변경 순서:
+최초 설정과 운영 정책 변경 순서:
 
-1. 승인 채널과 승인자 Slack ID를 확정합니다.
-2. Evidence의 REQUIRED/OPTIONAL 및 PRE/POST를 정책 책임자가 검토합니다.
-3. 새 version의 `ApprovalWorkflowDefinition`과 ordered step을 추가합니다.
-4. 해당 학과·예산·카테고리 `ApprovalRule`을 새 workflow로 연결합니다.
-5. 새 신청으로 검증합니다. 기존 신청의 snapshot은 수정하지 않습니다.
+1. private approval channel을 만들고 bot과 승인자를 초대합니다.
+2. 관리자가 App Home → **Manage Approval Rules** → **Configure Approval Rules**를 엽니다.
+3. 학과와 카테고리를 고른 뒤 채널, 단계 이름, 단계별 0명 이상의 승인자를 설정합니다.
+4. **Add Approval Step** 또는 **Remove**로 N단계를 구성하고 저장합니다.
+5. 필요하면 **Manage System Administrators**에서 운영 관리자를 교체하거나 추가합니다. 최소 한 명은 남아야 합니다.
+6. Evidence의 REQUIRED/OPTIONAL 및 PRE/POST는 정책 책임자가 검토합니다.
+7. 새 신청으로 검증합니다. 기존 신청의 snapshot은 수정하지 않습니다.
 
-`SYSTEM_ADMIN`은 App Home에서 관리 section을 볼 수 있습니다. 현재 MVP에는 write-capable 관리 UI가 없으므로 runtime definition 변경은 승인된 운영자가 migration/seed 또는 제한된 DB 운영 절차로 수행합니다. 일반 Slack 사용자가 설정을 변경하는 endpoint는 노출하지 않습니다.
+`SYSTEM_ADMIN`만 관리 section과 설정 modal을 사용할 수 있으며 모든 저장 요청은 backend에서 역할을 다시 확인합니다. `BOOTSTRAP_SYSTEM_ADMIN_SLACK_USER_IDS`는 관리자 계정이 DB에 하나도 없을 때만 적용되는 복구 가능한 최초 진입점입니다. 학과 채널과 승인자 정보는 환경 변수가 아니라 versioned DB configuration입니다.
+
+## Slack에서 수동 테스트
+
+1. 테스트용 private channel에 bot과 승인자 계정을 초대합니다.
+2. 관리자 계정으로 App Home을 열고 학과·카테고리 rule을 저장합니다.
+3. 학생 계정에서 `/expense`를 실행해 신청하고, 학과 channel에 승인 메시지가 생기는지 확인합니다.
+4. 지정하지 않은 계정으로 Approve를 눌러 권한 오류와 상태 불변을 확인합니다.
+5. 지정 승인자 중 한 명으로 Approve를 눌러 다음 단계와 current reviewer가 갱신되는지 확인합니다.
+6. Request Changes 후 학생 DM의 Edit Request로 재제출하고 같은 단계가 재개되는지 확인합니다.
+7. Airfare 등의 required POST 증빙 정책을 설정한 환경에서는 최종 승인 후 URL 제출 전후 상태를 확인합니다.
+
+`/expense`가 보이지 않거나 Modal이 열리지 않으면 공개 tunnel URL, 세 곳의 `/slack/events` URL, 앱 재설치 여부를 먼저 확인하세요. 설정 저장이 거부되면 bot 또는 선택한 승인자가 private channel 멤버인지 확인합니다.
 
 ## 테스트
 
@@ -131,6 +152,8 @@ pytest
 - required POST evidence 대기 후 완료
 - optional evidence 누락 허용
 - definition 변경 후 기존 request snapshot 불변
+- runtime rule의 복수 승인자와 미완성 rule 차단
+- bootstrap 관리자보다 DB runtime 관리자 우선
 
 ## PostgreSQL 및 Docker 배포
 
@@ -174,4 +197,3 @@ alembic/
 docs/
 tests/
 ```
-

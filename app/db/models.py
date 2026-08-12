@@ -26,6 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.db.enums import (
     ApplicantType,
+    ApprovalPolicy,
     ApprovalStepStatus,
     ApproverType,
     AuditEventType,
@@ -59,7 +60,7 @@ class Department(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name_en: Mapped[str] = mapped_column(String(120))
     name_ko: Mapped[str] = mapped_column(String(120))
-    approval_channel_id: Mapped[str] = mapped_column(String(64))
+    approval_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -135,11 +136,36 @@ class ApprovalStepDefinition(Base, TimestampMixin):
     step_order: Mapped[int] = mapped_column(Integer)
     name_en: Mapped[str] = mapped_column(String(120))
     name_ko: Mapped[str] = mapped_column(String(120))
-    approver_type: Mapped[ApproverType] = mapped_column(enum_column(ApproverType, 32))
-    approver_reference: Mapped[str] = mapped_column(String(120))
+    legacy_approver_type: Mapped[ApproverType | None] = mapped_column(
+        "approver_type", enum_column(ApproverType, 32), nullable=True
+    )
+    legacy_approver_reference: Mapped[str | None] = mapped_column(
+        "approver_reference", String(120), nullable=True
+    )
+    approval_policy: Mapped[ApprovalPolicy] = mapped_column(
+        enum_column(ApprovalPolicy, 16), default=ApprovalPolicy.ANY
+    )
     required: Mapped[bool] = mapped_column(Boolean, default=True)
 
     workflow: Mapped[ApprovalWorkflowDefinition] = relationship(back_populates="steps")
+    approvers: Mapped[list[ApprovalStepDefinitionApprover]] = relationship(
+        back_populates="step_definition",
+        cascade="all, delete-orphan",
+        order_by="ApprovalStepDefinitionApprover.slack_user_id",
+    )
+
+
+class ApprovalStepDefinitionApprover(Base, TimestampMixin):
+    __tablename__ = "approval_step_definition_approvers"
+    __table_args__ = (UniqueConstraint("step_definition_id", "slack_user_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    step_definition_id: Mapped[str] = mapped_column(
+        ForeignKey("approval_step_definitions.id", ondelete="CASCADE")
+    )
+    slack_user_id: Mapped[str] = mapped_column(String(64))
+
+    step_definition: Mapped[ApprovalStepDefinition] = relationship(back_populates="approvers")
 
 
 class ApprovalRule(Base, TimestampMixin):
@@ -264,8 +290,15 @@ class ApprovalStep(Base, TimestampMixin):
     step_order: Mapped[int] = mapped_column(Integer)
     name_en: Mapped[str] = mapped_column(String(120))
     name_ko: Mapped[str] = mapped_column(String(120))
-    approver_type: Mapped[ApproverType] = mapped_column(enum_column(ApproverType, 32))
-    approver_reference: Mapped[str] = mapped_column(String(120))
+    legacy_approver_type: Mapped[ApproverType | None] = mapped_column(
+        "approver_type", enum_column(ApproverType, 32), nullable=True
+    )
+    legacy_approver_reference: Mapped[str | None] = mapped_column(
+        "approver_reference", String(120), nullable=True
+    )
+    approval_policy: Mapped[ApprovalPolicy] = mapped_column(
+        enum_column(ApprovalPolicy, 16), default=ApprovalPolicy.ANY
+    )
     required: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[ApprovalStepStatus] = mapped_column(enum_column(ApprovalStepStatus, 32))
     acted_by_slack_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -273,6 +306,24 @@ class ApprovalStep(Base, TimestampMixin):
     acted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     request: Mapped[ExpenseRequest] = relationship(back_populates="approval_steps")
+    approvers: Mapped[list[ApprovalStepApprover]] = relationship(
+        back_populates="approval_step",
+        cascade="all, delete-orphan",
+        order_by="ApprovalStepApprover.slack_user_id",
+    )
+
+
+class ApprovalStepApprover(Base, TimestampMixin):
+    __tablename__ = "approval_step_approvers"
+    __table_args__ = (UniqueConstraint("approval_step_id", "slack_user_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    approval_step_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("approval_steps.id", ondelete="CASCADE")
+    )
+    slack_user_id: Mapped[str] = mapped_column(String(64))
+
+    approval_step: Mapped[ApprovalStep] = relationship(back_populates="approvers")
 
 
 class ApprovalActionLog(Base):

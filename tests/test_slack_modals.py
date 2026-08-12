@@ -5,7 +5,12 @@ from app.db.models import (
     EvidenceRequirementDefinition,
     ExpenseCategory,
 )
-from app.slack.modals import expense_context_modal, expense_details_modal
+from app.slack.modals import (
+    approval_rule_editor_modal,
+    expense_context_modal,
+    expense_details_modal,
+    system_admins_modal,
+)
 
 
 def test_context_and_dynamic_evidence_modal_use_block_kit_limits() -> None:
@@ -81,3 +86,25 @@ def test_context_and_dynamic_evidence_modal_use_block_kit_limits() -> None:
     }
     assert evidence_blocks["evidence__card_receipt"].get("optional", False) is False
     assert evidence_blocks["evidence__e_ticket"]["optional"] is True
+
+
+def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
+    editor = approval_rule_editor_modal(
+        "department_1",
+        "airfare",
+        "C_PRIVATE",
+        [
+            {
+                "name_en": "Professor Approval",
+                "name_ko": "교수 승인",
+                "approver_slack_user_ids": ["U_PROFESSOR_A", "U_PROFESSOR_B"],
+            }
+        ],
+    )
+    admins = system_admins_modal(["U_ADMIN_A", "U_ADMIN_B"])
+
+    editor_elements = [block.get("element") for block in editor["blocks"] if block.get("element")]
+    assert any(element["type"] == "conversations_select" for element in editor_elements)
+    assert any(element["type"] == "multi_users_select" for element in editor_elements)
+    assert admins["blocks"][0]["element"]["type"] == "multi_users_select"
+    assert len(editor["blocks"]) <= 100

@@ -172,13 +172,198 @@ def request_details_modal(request: ExpenseRequest) -> dict:
 def administration_modal() -> dict:
     return {
         "type": "modal",
-        "callback_id": "administration_info",
+        "callback_id": "administration_menu",
         "title": {"type": "plain_text", "text": t("administration_title")},
         "close": {"type": "plain_text", "text": t("close")},
         "blocks": [
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": t("configuration_seed_notice")},
+                "text": {"type": "mrkdwn", "text": t("admin_menu_notice")},
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": "configure_approval_rules",
+                        "style": "primary",
+                        "text": {"type": "plain_text", "text": t("configure_rules")},
+                        "value": "rules",
+                    },
+                    {
+                        "type": "button",
+                        "action_id": "configure_system_admins",
+                        "text": {"type": "plain_text", "text": t("manage_admins")},
+                        "value": "admins",
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def approval_rule_selector_modal(
+    departments: Iterable[Department], categories: Iterable[ExpenseCategory]
+) -> dict:
+    return {
+        "type": "modal",
+        "callback_id": "approval_rule_selector",
+        "title": {"type": "plain_text", "text": t("select_rule")},
+        "submit": {"type": "plain_text", "text": t("continue")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": [
+            {
+                "type": "input",
+                "block_id": "rule_department",
+                "label": {"type": "plain_text", "text": t("department")},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "value",
+                    "options": [
+                        _option(item.id, item.name_en, item.name_ko) for item in departments
+                    ],
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "rule_category",
+                "label": {"type": "plain_text", "text": t("expense_category")},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "value",
+                    "options": [
+                        _option(item.id, item.name_en, item.name_ko) for item in categories
+                    ],
+                },
+            },
+        ],
+    }
+
+
+def approval_rule_editor_modal(
+    department_id: str,
+    category_id: str,
+    approval_channel_id: str | None,
+    steps: list[dict],
+) -> dict:
+    channel_element: dict = {
+        "type": "conversations_select",
+        "action_id": "value",
+        "placeholder": {"type": "plain_text", "text": t("approval_channel")},
+        "filter": {
+            "include": ["private"],
+            "exclude_external_shared_channels": True,
+            "exclude_bot_users": True,
+        },
+    }
+    if approval_channel_id:
+        channel_element["initial_conversation"] = approval_channel_id
+
+    blocks: list[dict] = [
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": t("any_approver_notice")}],
+        },
+        {
+            "type": "input",
+            "block_id": "approval_channel",
+            "label": {"type": "plain_text", "text": t("approval_channel")},
+            "element": channel_element,
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": t("private_channel_only")}],
+        },
+    ]
+    for index, step in enumerate(steps):
+        approver_element: dict = {
+            "type": "multi_users_select",
+            "action_id": "value",
+            "placeholder": {"type": "plain_text", "text": t("step_approvers")},
+        }
+        approver_ids = list(step.get("approver_slack_user_ids") or [])
+        if approver_ids:
+            approver_element["initial_users"] = approver_ids
+        blocks.extend(
+            [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*Step {index + 1}*"},
+                    "accessory": {
+                        "type": "button",
+                        "action_id": "remove_approval_step",
+                        "text": {"type": "plain_text", "text": t("remove_step")},
+                        "value": str(index),
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": f"step_name_en__{index}",
+                    "label": {"type": "plain_text", "text": t("step_name_en")},
+                    "element": input_element("value", initial_value=str(step.get("name_en") or "")),
+                },
+                {
+                    "type": "input",
+                    "block_id": f"step_name_ko__{index}",
+                    "label": {"type": "plain_text", "text": t("step_name_ko")},
+                    "element": input_element("value", initial_value=str(step.get("name_ko") or "")),
+                },
+                {
+                    "type": "input",
+                    "block_id": f"step_approvers__{index}",
+                    "optional": True,
+                    "label": {"type": "plain_text", "text": t("step_approvers")},
+                    "element": approver_element,
+                },
+            ]
+        )
+    blocks.append(
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "add_approval_step",
+                    "text": {"type": "plain_text", "text": t("add_step")},
+                    "value": "add",
+                }
+            ],
+        }
+    )
+    return {
+        "type": "modal",
+        "callback_id": "approval_rule_editor",
+        "private_metadata": json.dumps(
+            {"department_id": department_id, "category_id": category_id}
+        ),
+        "title": {"type": "plain_text", "text": t("approval_rule_title")},
+        "submit": {"type": "plain_text", "text": t("save")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": blocks[:100],
+    }
+
+
+def system_admins_modal(admin_slack_user_ids: list[str]) -> dict:
+    element: dict = {
+        "type": "multi_users_select",
+        "action_id": "value",
+        "placeholder": {"type": "plain_text", "text": t("system_admins")},
+    }
+    if admin_slack_user_ids:
+        element["initial_users"] = admin_slack_user_ids
+    return {
+        "type": "modal",
+        "callback_id": "system_admins_editor",
+        "title": {"type": "plain_text", "text": t("admin_title")},
+        "submit": {"type": "plain_text", "text": t("save")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": [
+            {
+                "type": "input",
+                "block_id": "system_admins",
+                "label": {"type": "plain_text", "text": t("system_admins")},
+                "element": element,
             }
         ],
     }

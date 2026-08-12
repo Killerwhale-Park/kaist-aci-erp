@@ -15,6 +15,7 @@ from app.db.enums import (
 from app.db.models import (
     ApprovalActionLog,
     ApprovalStep,
+    ApprovalStepApprover,
     BudgetProgram,
     Department,
     EvidenceSubmission,
@@ -91,8 +92,10 @@ class ExpenseService:
                     "order": step.step_order,
                     "name_en": step.name_en,
                     "name_ko": step.name_ko,
-                    "approver_type": step.approver_type.value,
-                    "approver_reference": step.approver_reference,
+                    "approval_policy": step.approval_policy.value,
+                    "approver_slack_user_ids": [
+                        approver.slack_user_id for approver in step.approvers
+                    ],
                     "required": step.required,
                 }
                 for step in sorted(workflow.steps, key=lambda item: item.step_order)
@@ -138,18 +141,20 @@ class ExpenseService:
             request.evidence_submissions.append(submission)
 
         for definition in sorted(workflow.steps, key=lambda item: item.step_order):
-            request.approval_steps.append(
-                ApprovalStep(
-                    step_definition_id=definition.id,
-                    step_order=definition.step_order,
-                    name_en=definition.name_en,
-                    name_ko=definition.name_ko,
-                    approver_type=definition.approver_type,
-                    approver_reference=definition.approver_reference,
-                    required=definition.required,
-                    status=ApprovalStepStatus.WAITING,
-                )
+            step = ApprovalStep(
+                step_definition_id=definition.id,
+                step_order=definition.step_order,
+                name_en=definition.name_en,
+                name_ko=definition.name_ko,
+                approval_policy=definition.approval_policy,
+                required=definition.required,
+                status=ApprovalStepStatus.WAITING,
             )
+            step.approvers.extend(
+                ApprovalStepApprover(slack_user_id=approver.slack_user_id)
+                for approver in definition.approvers
+            )
+            request.approval_steps.append(step)
 
         validate_required_evidence(request.evidence_submissions, EvidenceTiming.PRE)
         self.engine.initialize(request)
@@ -282,6 +287,8 @@ class ExpenseService:
         category = self.session.get(ExpenseCategory, command.category_id)
         if department is None or not department.is_active:
             raise ConfigurationError("The selected department is unavailable")
+        if not department.approval_channel_id:
+            raise ConfigurationError("The selected department has no approval channel")
         if budget is None or not budget.is_active or not budget.is_available:
             raise ConfigurationError("The selected budget is unavailable")
         if category is None or not category.is_active:

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.approvals.authorization import ApprovalAuthorizer
 from app.approvals.engine import ApprovalEngine
 from app.db.enums import AuditEventType, RequestStatus
-from app.db.models import ApprovalActionLog, ApprovalStep, ExpenseRequest, UserProfile
+from app.db.models import ApprovalActionLog, ApprovalStep, ExpenseRequest
 from app.db.repository import ExpenseRequestRepository
 from app.exceptions import ApprovalPermissionError, DomainValidationError
 from app.i18n import t
@@ -77,8 +77,7 @@ class ApprovalService:
             step = self.engine.current_step(request)
         except Exception:
             return False
-        profile = self.session.get(UserProfile, actor_slack_user_id)
-        return self.authorizer.can_act(actor_slack_user_id, request, step, profile)
+        return self.authorizer.can_act(actor_slack_user_id, request, step)
 
     def assert_actor_can_approve(
         self, request_id: uuid.UUID | str, actor_slack_user_id: str
@@ -95,8 +94,7 @@ class ApprovalService:
     ) -> tuple[ExpenseRequest, ApprovalStep]:
         request = self.repository.get(request_id, for_update=for_update)
         step = self.engine.current_step(request)
-        profile = self.session.get(UserProfile, actor_slack_user_id)
-        if not self.authorizer.can_act(actor_slack_user_id, request, step, profile):
+        if not self.authorizer.can_act(actor_slack_user_id, request, step):
             raise ApprovalPermissionError("The Slack user cannot act on this approval step")
         return request, step
 

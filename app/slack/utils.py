@@ -10,10 +10,19 @@ def state_value(state: dict[str, Any], block_id: str, action_id: str = "value") 
     element_type = element.get("type", "")
     if element_type == "datepicker":
         return element.get("selected_date")
+    if element_type == "conversations_select":
+        return element.get("selected_conversation")
     if element_type.endswith("select"):
         selected = element.get("selected_option")
         return selected.get("value") if selected else None
     return element.get("value")
+
+
+def state_selected_users(
+    state: dict[str, Any], block_id: str, action_id: str = "value"
+) -> list[str]:
+    element = state.get("values", {}).get(block_id, {}).get(action_id, {})
+    return list(element.get("selected_users") or [])
 
 
 def input_element(

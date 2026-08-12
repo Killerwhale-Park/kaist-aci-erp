@@ -3,12 +3,12 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.db.models import ExpenseRequest
+from app.db.models import ApprovalStep, ExpenseRequest
 from app.exceptions import EntityNotFoundError
 
 REQUEST_LOAD_OPTIONS = (
     selectinload(ExpenseRequest.evidence_submissions),
-    selectinload(ExpenseRequest.approval_steps),
+    selectinload(ExpenseRequest.approval_steps).selectinload(ApprovalStep.approvers),
     selectinload(ExpenseRequest.department),
     selectinload(ExpenseRequest.budget_program),
     selectinload(ExpenseRequest.category),

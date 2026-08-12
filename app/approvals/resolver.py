@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import (
     ApprovalRule,
+    ApprovalStepDefinition,
     ApprovalWorkflowDefinition,
     EvidenceRequirementDefinition,
 )
@@ -25,7 +26,9 @@ class ApprovalRuleResolver:
                 ApprovalRule.is_active.is_(True),
             )
             .options(
-                selectinload(ApprovalRule.workflow).selectinload(ApprovalWorkflowDefinition.steps)
+                selectinload(ApprovalRule.workflow)
+                .selectinload(ApprovalWorkflowDefinition.steps)
+                .selectinload(ApprovalStepDefinition.approvers)
             )
         )
         rule = self.session.scalar(statement)
@@ -33,6 +36,8 @@ class ApprovalRuleResolver:
             raise ConfigurationError("No active approval workflow matches this request")
         if not rule.workflow.steps:
             raise ConfigurationError("The selected approval workflow has no steps")
+        if any(not step.approvers for step in rule.workflow.steps):
+            raise ConfigurationError("Every approval step must have at least one approver")
         return rule.workflow
 
     def evidence_requirements(self, category_id: str) -> list[EvidenceRequirementDefinition]:

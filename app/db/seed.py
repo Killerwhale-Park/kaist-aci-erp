@@ -1,3 +1,4 @@
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config.budgets import BUDGET_SEEDS
@@ -20,7 +21,7 @@ from app.db.session import session_scope
 
 
 def seed_database(session: Session, settings: Settings) -> None:
-    for item in department_seeds(settings):
+    for item in department_seeds():
         if session.get(Department, item.id) is None:
             session.add(Department(**item.__dict__))
 
@@ -57,7 +58,7 @@ def seed_database(session: Session, settings: Settings) -> None:
                     )
                 )
 
-    for item in workflow_rule_seeds(settings):
+    for item in workflow_rule_seeds():
         if session.get(ApprovalWorkflowDefinition, item.workflow_id) is None:
             session.add(
                 ApprovalWorkflowDefinition(
@@ -77,8 +78,6 @@ def seed_database(session: Session, settings: Settings) -> None:
                         step_order=step_order,
                         name_en=step.name_en,
                         name_ko=step.name_ko,
-                        approver_type=step.approver_type,
-                        approver_reference=step.approver_reference,
                         required=step.required,
                     )
                 )
@@ -93,18 +92,24 @@ def seed_database(session: Session, settings: Settings) -> None:
                 )
             )
 
-    for slack_user_id in settings.system_admin_ids:
-        profile = session.get(UserProfile, slack_user_id)
-        if profile is None:
-            session.add(
-                UserProfile(
-                    slack_user_id=slack_user_id,
-                    display_name=slack_user_id,
-                    role=UserRole.SYSTEM_ADMIN,
+    admin_count = session.scalar(
+        select(func.count())
+        .select_from(UserProfile)
+        .where(UserProfile.role == UserRole.SYSTEM_ADMIN)
+    )
+    if admin_count == 0:
+        for slack_user_id in settings.bootstrap_system_admin_ids:
+            profile = session.get(UserProfile, slack_user_id)
+            if profile is None:
+                session.add(
+                    UserProfile(
+                        slack_user_id=slack_user_id,
+                        display_name=slack_user_id,
+                        role=UserRole.SYSTEM_ADMIN,
+                    )
                 )
-            )
-        else:
-            profile.role = UserRole.SYSTEM_ADMIN
+            else:
+                profile.role = UserRole.SYSTEM_ADMIN
 
 
 def main() -> None:

@@ -16,17 +16,11 @@ class UserProfileService:
             profile = UserProfile(
                 slack_user_id=slack_user_id,
                 display_name=display_name or slack_user_id,
-                role=(
-                    UserRole.SYSTEM_ADMIN
-                    if slack_user_id in self.settings.system_admin_ids
-                    else UserRole.REQUESTER
-                ),
+                role=UserRole.REQUESTER,
             )
             self.session.add(profile)
         elif display_name:
             profile.display_name = display_name
-        if slack_user_id in self.settings.system_admin_ids:
-            profile.role = UserRole.SYSTEM_ADMIN
         return profile
 
     def update_applicant_details(

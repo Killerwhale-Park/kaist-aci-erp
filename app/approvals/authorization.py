@@ -1,5 +1,5 @@
-from app.db.enums import ApprovalStepStatus, ApproverType, RequestStatus, UserRole
-from app.db.models import ApprovalStep, ExpenseRequest, UserProfile
+from app.db.enums import ApprovalStepStatus, RequestStatus
+from app.db.models import ApprovalStep, ExpenseRequest
 
 
 class ApprovalAuthorizer:
@@ -8,7 +8,6 @@ class ApprovalAuthorizer:
         slack_user_id: str,
         request: ExpenseRequest,
         step: ApprovalStep,
-        profile: UserProfile | None,
     ) -> bool:
         if request.status != RequestStatus.IN_APPROVAL:
             return False
@@ -16,13 +15,4 @@ class ApprovalAuthorizer:
             return False
         if step.status != ApprovalStepStatus.PENDING:
             return False
-        if step.approver_type == ApproverType.SLACK_USER:
-            return step.approver_reference == slack_user_id
-        if step.approver_type == ApproverType.DEPARTMENT_ROLE:
-            return bool(
-                profile
-                and profile.department_id == request.department_id
-                and profile.role.value == step.approver_reference
-                and profile.role in {UserRole.APPROVER, UserRole.SYSTEM_ADMIN}
-            )
-        return False
+        return slack_user_id in {approver.slack_user_id for approver in step.approvers}

@@ -8,7 +8,7 @@ The MVP supports one available budget program, `student_support`, and four confi
 
 One Slack app and one database serve four configurable departments. Requesters only see their own requests. Approval messages are posted to department-specific private channels, and applicants do not need access to those channels.
 
-Unconfirmed accounting rules are configuration, not code. The initial evidence candidates are seeded as optional until policy owners explicitly mark them required. Sample approvers and channel IDs must be replaced before deployment.
+Unconfirmed accounting rules are configuration, not code. The initial evidence candidates are seeded as optional until policy owners explicitly mark them required. Workflow step names are seeded, while approvers and channel IDs are configured by a system administrator in Slack.
 
 ## 2. Slack platform constraints
 
@@ -52,7 +52,8 @@ FastAPI exposes the Slack endpoint and operational health endpoints. Business se
 - `ExpenseCategory`: belongs to a budget program.
 - `EvidenceRequirementDefinition`: category evidence key, timing, requirement level, waiver capability, descriptions, and display order.
 - `ApprovalWorkflowDefinition`: named, versioned workflow configuration.
-- `ApprovalStepDefinition`: ordered approver rule. The number of rows is unrestricted.
+- `ApprovalStepDefinition`: ordered step name and approval policy. The number of rows is unrestricted.
+- `ApprovalStepDefinitionApprover`: zero or more eligible Slack users for a definition step.
 - `ApprovalRule`: resolves department + budget + category to one active workflow.
 
 ### Identity and authorization entities
@@ -63,7 +64,8 @@ FastAPI exposes the Slack endpoint and operational health endpoints. Business se
 
 - `ExpenseRequest`: canonical applicant Slack ID and submission fields, request status, current step order, Slack message coordinates, and JSON snapshots of the selected definitions.
 - `EvidenceSubmission`: one snapshot row per requirement, with names, timing, requirement level, URL, note, and submitted timestamp.
-- `ApprovalStep`: one snapshot row per workflow step, including ordered approver rule and action data.
+- `ApprovalStep`: one snapshot row per workflow step, including ordered policy and action data.
+- `ApprovalStepApprover`: immutable eligible Slack users copied into a request step.
 - `ApprovalActionLog`: append-only audit event with actor, optional step, timestamp, and JSON metadata.
 
 Definition identifiers and instance identifiers remain separate. Foreign keys to definitions are retained for traceability, but request behavior reads instance rows rather than live definitions.
@@ -111,9 +113,11 @@ The actor is always `body.user.id` from a signature-verified Slack request. A re
 
 1. The request is in `IN_APPROVAL`.
 2. The target step is the request's current `PENDING` step.
-3. A `SLACK_USER` rule matches the actor ID, or a `DEPARTMENT_ROLE` rule matches both the actor's role and the request department.
+3. The actor ID is in the current step's snapshotted eligible approver set.
 
 Channel membership and button visibility are irrelevant to this decision. System administrators manage configuration but receive no implicit approval override.
+
+The MVP implements `ANY`: when a step has multiple eligible users, one matching user can complete it. A definition with no eligible user can be saved as incomplete but cannot be resolved for a new request. Saving a change creates a new workflow version; existing request snapshots remain unchanged.
 
 ## 8. Request state transitions
 
@@ -159,7 +163,7 @@ The department channel message shows request data, evidence links, the complete 
 
 ### Administrator
 
-App Home adds pending approvals and a system administration section for `SYSTEM_ADMIN`. The MVP seeds and stores runtime definitions in the database. A later admin UI can edit the same definition tables and validate candidate approvers against `conversations.members` without changing the engine.
+App Home adds pending approvals and a system administration section for `SYSTEM_ADMIN`. Its Block Kit flow edits the department private channel and a category's ordered N-step rule, supports multiple Slack users per step, and manages the system-admin set. The backend validates the admin role, private-channel status, bot membership, and selected approver membership before creating a new workflow version. The environment variable for bootstrap administrators is used only when the database has no system administrator.
 
 ## 10. Directory structure
 

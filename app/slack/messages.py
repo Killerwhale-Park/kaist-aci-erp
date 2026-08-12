@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.db.enums import ApprovalStepStatus, ApproverType, EvidenceSubmissionStatus, RequestStatus
+from app.db.enums import ApprovalStepStatus, EvidenceSubmissionStatus, RequestStatus
 from app.db.models import ExpenseRequest
 from app.i18n import t
 from app.slack.utils import escape_mrkdwn
@@ -138,11 +138,9 @@ def request_message_blocks(request: ExpenseRequest, *, include_actions: bool = T
         current = next(
             step for step in request.approval_steps if step.step_order == request.current_step_order
         )
-        reviewer = (
-            f"<@{current.approver_reference}>"
-            if current.approver_type == ApproverType.SLACK_USER
-            else escape_mrkdwn(current.approver_reference)
-        )
+        reviewer = ", ".join(f"<@{item.slack_user_id}>" for item in current.approvers)
+        if not reviewer:
+            reviewer = t("unassigned")
         progress_text += f"\n\n*{t('current_reviewer')}*\n{reviewer}"
     progress_text += f"\n\n*{t('status')}*\n{status_text(request.status)}"
     blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": progress_text}})

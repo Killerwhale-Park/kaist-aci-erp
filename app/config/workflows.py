@@ -1,15 +1,10 @@
 from dataclasses import dataclass
 
-from app.config.settings import Settings
-from app.db.enums import ApproverType
-
 
 @dataclass(frozen=True)
 class ApprovalStepSeed:
     name_en: str
     name_ko: str
-    approver_type: ApproverType
-    approver_reference: str
     required: bool = True
 
 
@@ -25,13 +20,10 @@ class WorkflowRuleSeed:
     steps: tuple[ApprovalStepSeed, ...]
 
 
-def workflow_rule_seeds(settings: Settings) -> list[WorkflowRuleSeed]:
+def workflow_rule_seeds() -> list[WorkflowRuleSeed]:
     rules: list[WorkflowRuleSeed] = []
     for department_number in range(1, 5):
         department_id = f"department_{department_number}"
-        professor = settings.approver_for(department_id, "professor")
-        administration = settings.approver_for(department_id, "administration")
-        inspector = settings.approver_for(department_id, "inspector")
         for category_id in (
             "supplies",
             "lodging",
@@ -42,14 +34,10 @@ def workflow_rule_seeds(settings: Settings) -> list[WorkflowRuleSeed]:
                 ApprovalStepSeed(
                     "Professor Approval",
                     "교수 승인",
-                    ApproverType.SLACK_USER,
-                    professor,
                 ),
                 ApprovalStepSeed(
                     "Administration Review",
                     "행정 검토",
-                    ApproverType.SLACK_USER,
-                    administration,
                 ),
             ]
             if category_id == "supplies":
@@ -57,8 +45,6 @@ def workflow_rule_seeds(settings: Settings) -> list[WorkflowRuleSeed]:
                     ApprovalStepSeed(
                         "Inspection",
                         "검수",
-                        ApproverType.SLACK_USER,
-                        inspector,
                     )
                 )
             workflow_id = f"wf_{department_id}_{category_id}_v1"
