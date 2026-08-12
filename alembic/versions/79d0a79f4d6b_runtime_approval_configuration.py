@@ -110,6 +110,7 @@ def upgrade() -> None:
         ),
     )
     _migrate_legacy_approvers()
+    _demote_legacy_admin_placeholders()
 
 
 def _migrate_legacy_approvers() -> None:
@@ -164,6 +165,15 @@ def _migrate_legacy_approvers() -> None:
                 "updated_at": now,
             },
         )
+
+
+def _demote_legacy_admin_placeholders() -> None:
+    op.get_bind().execute(
+        sa.text(
+            "UPDATE user_profiles SET role = 'REQUESTER' "
+            "WHERE role = 'SYSTEM_ADMIN' AND slack_user_id LIKE 'U_REPLACE%'"
+        )
+    )
 
 
 def downgrade() -> None:
