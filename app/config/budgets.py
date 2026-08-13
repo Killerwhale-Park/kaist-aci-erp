@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from app.domain.enums import BudgetFormScope
+
 LEGACY_BUDGET_IDS = {"student_support": "department_budget"}
 
 
@@ -9,10 +11,17 @@ class BudgetNodeSeed:
     parent_id: str | None
     name_en: str
     name_ko: str
+    form_scope: BudgetFormScope | None = None
 
 
 BUDGET_NODE_SEEDS = [
-    BudgetNodeSeed("department_budget", None, "Department Budget", "학과예산"),
+    BudgetNodeSeed(
+        "department_budget",
+        None,
+        "Department Budget",
+        "학과예산",
+        BudgetFormScope.DEPARTMENT,
+    ),
     BudgetNodeSeed(
         "academic_development",
         "department_budget",

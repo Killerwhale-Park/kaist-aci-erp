@@ -1,10 +1,15 @@
+import pytest
+
+from app.config.roles import ADMIN_STAFF_ROLE, PROFESSOR_ROLE, STUDENT_COORDINATOR_ROLE
 from app.domain.catalog import (
     budget_path,
     budgets,
     categories,
     departments,
     resolve_expense_categories,
+    workflow_for_budget_node,
 )
+from app.domain.enums import BudgetFormScope
 from app.domain.models import BudgetFormMapping, BudgetNode, ExpenseForm
 
 
@@ -59,3 +64,76 @@ def test_budget_items_and_forms_are_independent_axes() -> None:
         "union_airfare": "union_nonsettlement",
         "other_airfare": "airfare_settlement",
     }
+
+
+def test_department_scoped_forms_do_not_affect_college_budget_forms() -> None:
+    nodes = [
+        BudgetNode(
+            "department_budget",
+            None,
+            "Department Budget",
+            "학과별 예산",
+            BudgetFormScope.DEPARTMENT,
+        ),
+        BudgetNode("department_airfare", "department_budget", "Airfare", "항공료"),
+        BudgetNode(
+            "student_council_budget",
+            None,
+            "Department Student Council Budget",
+            "학과 학생회 예산",
+            BudgetFormScope.DEPARTMENT,
+        ),
+        BudgetNode("council_airfare", "student_council_budget", "Airfare", "항공료"),
+        BudgetNode(
+            "college_budget",
+            None,
+            "College Budget",
+            "단과대 예산",
+            BudgetFormScope.GLOBAL,
+        ),
+        BudgetNode("college_airfare", "college_budget", "Airfare", "항공료"),
+    ]
+    forms = [
+        ExpenseForm("airfare_default", "Default Airfare", "항공료 기본"),
+        ExpenseForm("airfare_aic", "AIC Airfare", "AIC 항공료"),
+    ]
+    mappings = [
+        BudgetFormMapping("department_airfare", "airfare_default"),
+        BudgetFormMapping("department_airfare", "airfare_aic", "department_1"),
+        BudgetFormMapping("council_airfare", "airfare_default"),
+        BudgetFormMapping("council_airfare", "airfare_aic", "department_1"),
+        BudgetFormMapping("college_airfare", "airfare_default"),
+    ]
+
+    department_1 = resolve_expense_categories(nodes, forms, mappings, "department_1")
+    department_2 = resolve_expense_categories(nodes, forms, mappings, "department_2")
+    assert {item.id: item.form_id for item in department_1} == {
+        "department_airfare": "airfare_aic",
+        "council_airfare": "airfare_aic",
+        "college_airfare": "airfare_default",
+    }
+    assert {item.id: item.form_id for item in department_2} == {
+        "department_airfare": "airfare_default",
+        "council_airfare": "airfare_default",
+        "college_airfare": "airfare_default",
+    }
+
+    with pytest.raises(ValueError, match="Global budget programs"):
+        resolve_expense_categories(
+            nodes,
+            forms,
+            [BudgetFormMapping("college_airfare", "airfare_aic", "department_1")],
+            "department_1",
+        )
+
+
+def test_academic_development_workflow_is_role_based_and_n_step() -> None:
+    workflow = workflow_for_budget_node("supplies", "department_1")
+
+    assert workflow is not None
+    assert workflow.id == "academic_development_approval"
+    assert [step.approver_roles for step in workflow.steps] == [
+        (STUDENT_COORDINATOR_ROLE,),
+        (PROFESSOR_ROLE,),
+        (ADMIN_STAFF_ROLE,),
+    ]

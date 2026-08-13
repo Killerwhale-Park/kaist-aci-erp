@@ -7,6 +7,7 @@ from decimal import Decimal
 from app.domain.enums import (
     ApplicantType,
     ApprovalStepStatus,
+    BudgetFormScope,
     EvidenceRequirementLevel,
     EvidenceSubmissionStatus,
     EvidenceTiming,
@@ -32,6 +33,7 @@ class BudgetProgram:
     name_ko: str
     is_available: bool
     is_active: bool = True
+    form_scope: BudgetFormScope = BudgetFormScope.GLOBAL
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,7 @@ class BudgetNode:
     parent_id: str | None
     name_en: str
     name_ko: str
+    form_scope: BudgetFormScope | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,30 @@ class ExpenseForm:
 class BudgetFormMapping:
     budget_node_id: str
     form_id: str
+    department_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ApprovalWorkflowStepDefinition:
+    id: str
+    name_en: str
+    name_ko: str
+    approver_roles: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ApprovalWorkflowDefinition:
+    id: str
+    name_en: str
+    name_ko: str
+    steps: tuple[ApprovalWorkflowStepDefinition, ...]
+
+
+@dataclass(frozen=True)
+class BudgetWorkflowMapping:
+    budget_node_id: str
+    workflow_id: str
+    department_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +153,7 @@ class ApprovalRuleStep:
     name_en: str
     name_ko: str
     approver_slack_user_ids: tuple[str, ...]
+    approver_roles: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,6 +163,9 @@ class ApprovalRule:
     category_id: str
     approval_channel_id: str | None
     steps: tuple[ApprovalRuleStep, ...]
+    workflow_id: str | None = None
+    workflow_name_en: str | None = None
+    workflow_name_ko: str | None = None
     version: int = 0
 
     @property

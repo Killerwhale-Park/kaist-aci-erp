@@ -1,6 +1,12 @@
 import json
 from collections.abc import Iterable
 
+from app.config.roles import (
+    WORKSPACE_ROLE_SCOPE,
+    RoleDefinitionSeed,
+    empty_role_set,
+    role_definitions,
+)
 from app.domain.enums import ApplicantType, EvidenceRequirementLevel, EvidenceTiming
 from app.domain.models import (
     BudgetNode,
@@ -29,9 +35,7 @@ def _category_option(category: ExpenseCategory) -> dict:
     return {
         "text": {
             "type": "plain_text",
-            "text": (f"{name_ko} → {category.form_name_ko} / {name_en} → {category.form_name_en}")[
-                :75
-            ],
+            "text": f"{name_ko} / {name_en}"[:75],
         },
         "value": category.id,
     }
@@ -436,27 +440,12 @@ def administration_modal() -> dict:
                     },
                     {
                         "type": "button",
-                        "action_id": "configure_system_admins",
-                        "text": {"type": "plain_text", "text": t("manage_admins")},
-                        "value": "admins",
+                        "action_id": "configure_access_roles",
+                        "text": {"type": "plain_text", "text": t("manage_roles")},
+                        "value": "roles",
                     },
                 ],
             },
-        ],
-    }
-
-
-def configuration_loading_modal() -> dict:
-    return {
-        "type": "modal",
-        "callback_id": "configuration_loading",
-        "title": {"type": "plain_text", "text": t("administration_title")},
-        "close": {"type": "plain_text", "text": t("close")},
-        "blocks": [
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": t("configuration_loading")},
-            }
         ],
     }
 
@@ -516,6 +505,8 @@ def approval_rule_editor_modal(
     department_id: str,
     category_id: str,
     approval_channel_id: str | None,
+    workflow_name_en: str,
+    workflow_name_ko: str,
     steps: list[dict],
 ) -> dict:
     channel_element: dict = {
@@ -533,8 +524,11 @@ def approval_rule_editor_modal(
 
     blocks: list[dict] = [
         {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": t("any_approver_notice")}],
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{t('workflow')}*\n{display_name(workflow_name_en, workflow_name_ko)}",
+            },
         },
         {
             "type": "input",
@@ -548,61 +542,26 @@ def approval_rule_editor_modal(
         },
     ]
     for index, step in enumerate(steps):
-        approver_element: dict = {
-            "type": "multi_users_select",
-            "action_id": "value",
-            "placeholder": {"type": "plain_text", "text": t("step_approvers")},
-        }
         approver_ids = list(step.get("approver_slack_user_ids") or [])
-        if approver_ids:
-            approver_element["initial_users"] = approver_ids
+        roles = ", ".join(step.get("approver_roles") or []) or "-"
+        users = ", ".join(f"<@{user_id}>" for user_id in approver_ids) or t("unassigned")
+        step_name = display_name(str(step.get("name_en") or ""), str(step.get("name_ko") or ""))
         blocks.extend(
             [
                 {"type": "divider"},
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*Step {index + 1}*"},
-                    "accessory": {
-                        "type": "button",
-                        "action_id": "remove_approval_step",
-                        "text": {"type": "plain_text", "text": t("remove_step")},
-                        "value": str(index),
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"*Step {index + 1}: {step_name}*\n"
+                            f"{t('required_roles')}: `{roles}`\n"
+                            f"{t('assigned_members')}: {users}"
+                        ),
                     },
-                },
-                {
-                    "type": "input",
-                    "block_id": f"step_name_en__{index}",
-                    "label": {"type": "plain_text", "text": t("step_name_en")},
-                    "element": input_element("value", initial_value=str(step.get("name_en") or "")),
-                },
-                {
-                    "type": "input",
-                    "block_id": f"step_name_ko__{index}",
-                    "label": {"type": "plain_text", "text": t("step_name_ko")},
-                    "element": input_element("value", initial_value=str(step.get("name_ko") or "")),
-                },
-                {
-                    "type": "input",
-                    "block_id": f"step_approvers__{index}",
-                    "optional": True,
-                    "label": {"type": "plain_text", "text": t("step_approvers")},
-                    "element": approver_element,
                 },
             ]
         )
-    blocks.append(
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": "add_approval_step",
-                    "text": {"type": "plain_text", "text": t("add_step")},
-                    "value": "add",
-                }
-            ],
-        }
-    )
     return {
         "type": "modal",
         "callback_id": "approval_rule_editor",
@@ -616,28 +575,66 @@ def approval_rule_editor_modal(
     }
 
 
-def system_admins_modal(admin_slack_user_ids: list[str]) -> dict:
-    element: dict = {
-        "type": "multi_users_select",
-        "action_id": "value",
-        "placeholder": {"type": "plain_text", "text": t("system_admins")},
-    }
-    if admin_slack_user_ids:
-        element["initial_users"] = admin_slack_user_ids
-    return {
-        "type": "modal",
-        "callback_id": "system_admins_editor",
-        "title": {"type": "plain_text", "text": t("admin_title")},
-        "submit": {"type": "plain_text", "text": t("save")},
-        "close": {"type": "plain_text", "text": t("cancel")},
-        "blocks": [
+def role_configuration_modal(
+    assignments: dict[str, dict[str, set[str]]], departments: Iterable[Department]
+) -> dict:
+    blocks: list[dict] = [
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": t("role_configuration_notice")}],
+        }
+    ]
+
+    def append_role_field(scope: str, role: RoleDefinitionSeed) -> None:
+        selected = sorted(assignments.get(scope, empty_role_set()).get(role.id, set()))
+        label = display_name(role.name_en, role.name_ko)
+        element: dict = {
+            "type": "multi_users_select",
+            "action_id": "value",
+            "placeholder": {"type": "plain_text", "text": label[:150]},
+        }
+        if selected:
+            element["initial_users"] = selected
+        blocks.append(
             {
                 "type": "input",
-                "block_id": "system_admins",
-                "label": {"type": "plain_text", "text": t("system_admins")},
+                "block_id": f"access_role__{scope}__{role.id}",
+                "optional": not role.required,
+                "label": {"type": "plain_text", "text": label},
                 "element": element,
             }
-        ],
+        )
+
+    blocks.append(
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": t("workspace_roles")},
+        }
+    )
+    for role in role_definitions(department_scoped=False):
+        append_role_field(WORKSPACE_ROLE_SCOPE, role)
+    for department in departments:
+        blocks.extend(
+            [
+                {"type": "divider"},
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": display_name(department.name_en, department.name_ko)[:150],
+                    },
+                },
+            ]
+        )
+        for role in role_definitions(department_scoped=True):
+            append_role_field(department.id, role)
+    return {
+        "type": "modal",
+        "callback_id": "access_roles_editor",
+        "title": {"type": "plain_text", "text": t("roles_title")},
+        "submit": {"type": "plain_text", "text": t("save")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": blocks,
     }
 
 

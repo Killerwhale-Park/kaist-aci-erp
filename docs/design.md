@@ -20,7 +20,7 @@ Slack Modal / App Home / Buttons / DM
 
 ## Channel model
 
-중앙 원장 채널은 없습니다. 각 승인 규칙은 비공개 채널 하나를 지정하며, 학과별·항목별로 같은 채널을 공유하거나 서로 다른 채널을 선택할 수 있습니다.
+중앙 원장 채널은 없습니다. 각 승인 route는 비공개 채널 하나를 지정하며, 학과별·항목별로 같은 채널을 공유하거나 서로 다른 채널을 선택할 수 있습니다.
 
 봇은 `conversations.list`로 자신이 참여한 비공개 채널을 찾고 각 채널의 메시지 metadata를 조회합니다. 따라서 채널 ID를 환경변수에 넣지 않습니다.
 
@@ -28,11 +28,11 @@ Slack Modal / App Home / Buttons / DM
 
 - `expense_record`: 신청 한 건의 현재 상태와 승인 버튼
 - `work_request_record`: 구매 요청 또는 학생 정산 요청의 현재 상태와 완료 버튼
-- `configuration_record`: 승인 규칙 또는 관리자 설정
+- `configuration_record`: 승인 route 또는 접근 Role 설정
 
 신청 메시지의 thread에는 `expense_event_chunk`, 설정 메시지의 thread에는 `configuration_chunk`가 append-only로 추가됩니다. 큰 payload는 zlib 압축 후 여러 metadata message로 나눕니다. 모든 chunk가 있는 event만 유효합니다.
 
-구매 요청과 정산 요청은 생성할 때 게시 채널을 선택합니다. 같은 채널을 공유해도 되고 별도 채널로 분리해도 됩니다. 생성과 완료 이력은 `work_request_event_chunk`로 해당 메시지 thread에 저장합니다. 정산 요청 생성은 현재 승인 규칙의 승인자와 시스템 관리자에게만 허용합니다.
+구매 요청과 정산 요청은 생성할 때 게시 채널을 선택합니다. 같은 채널을 공유해도 되고 별도 채널로 분리해도 됩니다. 생성과 완료 이력은 `work_request_event_chunk`로 해당 메시지 thread에 저장합니다. 정산 요청 생성은 교수·행정팀·시스템 관리자 Role에게만 허용합니다.
 
 ## Expense events
 
@@ -85,11 +85,29 @@ Slack 모달은 선택한 노드의 자식만 다음 selector로 추가합니다
 
 `BudgetNode`와 `ExpenseForm`은 독립적인 축입니다. 같은 이름의 항목도 재원 경로별로 서로 다른 node ID를 가지므로 각기 다른 양식에 연결할 수 있습니다. 반대로 하나의 양식을 여러 재원 leaf가 재사용할 수도 있습니다. `ExpenseCategory`는 저장되는 별도 설정 엔티티가 아니라 이 mapping을 Slack workflow가 소비할 수 있게 풀어낸 projection입니다.
 
+`ApprovalWorkflowDefinition`도 양식과 독립적인 정책 축입니다. `BudgetWorkflowMapping`이 재원 node와 workflow를 연결하며 상위 node의 mapping은 하위 leaf에 상속됩니다. 따라서 학사계발비 아래에 새 지출 항목이 추가되어도 같은 workflow를 자동으로 사용하며, 필요하면 더 깊은 node에서 override할 수 있습니다.
+
+`BudgetFormScope.DEPARTMENT`인 재원은 `department_id`별 mapping override를 허용하고, override가 없으면 공통 default mapping을 사용합니다. `BudgetFormScope.GLOBAL`인 단과대 예산 같은 재원은 학과별 override를 금지합니다.
+
+## Access role configuration
+
+접근 권한은 승인 workflow와 독립적인 Role 축입니다. Role 정의는 ID·표시명·scope·capability를 가진 configuration이며, Role assignment는 학과 scope를 가지므로 다른 학과의 담당자가 승인 후보에 섞이지 않습니다.
+
+- `REQUESTER`: 신청 가능자
+- `STUDENT_COORDINATOR`: 학생 담당자
+- `PROFESSOR`: 교수, 신청 및 정산 지정 가능
+- `ADMIN_STAFF`: 행정팀, 신청 및 정산 지정 가능
+- `SYSTEM_ADMIN`: Role·승인 route 관리 및 모든 운영 권한
+
+Workflow step은 사용자 ID가 아닌 필요 Role을 참조합니다. 신청 시점에 `신청 학과 + Role`을 실제 Slack 사용자로 해석해 snapshot을 만듭니다. 최초 복구 관리자는 source configuration에 유지하고, 추가 Role 배정은 Slack 관리 모달에서 저장합니다.
+
+현재 학사계발비 workflow는 `학생 담당자 확인 → 담당 교수 승인·검수 → 행정팀 검토`입니다. 엔진·Slack 모달·권한 검사는 구체적인 Role 목록이나 단계 수를 알지 못하며 configuration을 순회합니다. 학과장·학생회장 승인이 추가되어도 Role 정의와 workflow configuration만 변경하고, 사람 교체는 Slack Role assignment만 바꿉니다.
+
 ## Query and configuration
 
 App Home 조회 시 root metadata를 먼저 필터링합니다. 신청자 또는 현재 승인자가 일치하는 메시지만 thread를 replay합니다.
 
-승인 규칙은 선택한 승인 채널에 저장됩니다. 시스템 관리자 설정은 봇이 참여한 업무 채널에 복제되며 최신 timestamp의 설정을 사용합니다. 새 신청은 최신 규칙을 snapshot으로 저장하므로 이후 규칙 변경이 기존 신청을 바꾸지 않습니다.
+승인 route와 Role assignment는 Slack configuration message에 저장됩니다. 작은 설정값은 root metadata에 inline하여 thread 조회를 제거하고, 함수 instance TTL cache로 반복 전수 조회를 피합니다. 새 신청은 해석된 workflow·Role 담당자를 snapshot으로 저장하므로 이후 정책이나 담당자 변경이 기존 신청을 바꾸지 않습니다.
 
 ## Retention
 

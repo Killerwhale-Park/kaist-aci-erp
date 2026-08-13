@@ -9,6 +9,7 @@ from app.config.settings import Settings
 class FakeSlackClient:
     def __init__(self) -> None:
         self.messages: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self.calls: dict[str, int] = defaultdict(int)
         self.private_channels = {"C_APPROVAL", "C_DEPARTMENT_2"}
         self.counter = 0
 
@@ -30,12 +31,14 @@ class FakeSlackClient:
         raise AssertionError("message not found")
 
     async def conversations_history(self, **kwargs):
+        self.calls["conversations_history"] += 1
         roots = [
             message for message in self.messages[kwargs["channel"]] if not message.get("thread_ts")
         ]
         return {"ok": True, "messages": sorted(roots, key=lambda item: item["ts"], reverse=True)}
 
     async def conversations_list(self, **kwargs):
+        self.calls["conversations_list"] += 1
         return {
             "ok": True,
             "channels": [
@@ -45,6 +48,7 @@ class FakeSlackClient:
         }
 
     async def conversations_replies(self, **kwargs):
+        self.calls["conversations_replies"] += 1
         channel_messages = self.messages[kwargs["channel"]]
         selected = [
             message
@@ -56,10 +60,7 @@ class FakeSlackClient:
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        bootstrap_system_admin_slack_user_ids="U_ADMIN",
-    )
+    return Settings(_env_file=None)
 
 
 @pytest.fixture

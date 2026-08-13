@@ -1,58 +1,48 @@
 from dataclasses import dataclass
 
+from app.config.roles import ADMIN_STAFF_ROLE, PROFESSOR_ROLE, STUDENT_COORDINATOR_ROLE
+
 
 @dataclass(frozen=True)
 class ApprovalStepSeed:
+    id: str
     name_en: str
     name_ko: str
-    required: bool = True
+    approver_roles: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class WorkflowRuleSeed:
-    workflow_id: str
-    rule_id: str
-    department_id: str
-    budget_program_id: str
-    category_id: str
+class ApprovalWorkflowSeed:
+    id: str
     name_en: str
     name_ko: str
     steps: tuple[ApprovalStepSeed, ...]
 
 
-def workflow_rule_seeds() -> list[WorkflowRuleSeed]:
-    rules: list[WorkflowRuleSeed] = []
-    for department_number in range(1, 5):
-        department_id = f"department_{department_number}"
-        for category_id in ("supplies",):
-            steps = [
-                ApprovalStepSeed(
-                    "Professor Approval",
-                    "교수 승인",
-                ),
-                ApprovalStepSeed(
-                    "Administration Review",
-                    "행정 검토",
-                ),
-            ]
-            if category_id == "supplies":
-                steps.append(
-                    ApprovalStepSeed(
-                        "Inspection",
-                        "검수",
-                    )
-                )
-            workflow_id = f"wf_{department_id}_{category_id}_v1"
-            rules.append(
-                WorkflowRuleSeed(
-                    workflow_id=workflow_id,
-                    rule_id=f"rule_{department_id}_department_budget_{category_id}",
-                    department_id=department_id,
-                    budget_program_id="department_budget",
-                    category_id=category_id,
-                    name_en=f"{department_id} {category_id} sample workflow",
-                    name_ko=f"{department_id} {category_id} 샘플 승인 절차",
-                    steps=tuple(steps),
-                )
-            )
-    return rules
+APPROVAL_WORKFLOW_SEEDS = [
+    ApprovalWorkflowSeed(
+        id="academic_development_approval",
+        name_en="Academic Development Approval",
+        name_ko="학사계발비 승인",
+        steps=(
+            ApprovalStepSeed(
+                id="student_coordinator_review",
+                name_en="Student Coordinator Review",
+                name_ko="학생 담당자 확인",
+                approver_roles=(STUDENT_COORDINATOR_ROLE,),
+            ),
+            ApprovalStepSeed(
+                id="responsible_professor_approval",
+                name_en="Responsible Professor Approval and Inspection",
+                name_ko="담당 교수 승인 및 검수",
+                approver_roles=(PROFESSOR_ROLE,),
+            ),
+            ApprovalStepSeed(
+                id="administrative_review",
+                name_en="Administrative Review",
+                name_ko="행정팀 검토",
+                approver_roles=(ADMIN_STAFF_ROLE,),
+            ),
+        ),
+    )
+]

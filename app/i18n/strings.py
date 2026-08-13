@@ -97,45 +97,49 @@ STRINGS = {
     "system_administration": "System Administration / 시스템 관리",
     "administration_title": "Administration / 관리",
     "configuration_seed_notice": (
-        "Approval rules are stored in the selected private Slack channel.\n"
-        "승인 규칙은 선택한 비공개 Slack 채널에 저장됩니다."
+        "Approval routing is stored in the selected private Slack channel.\n"
+        "승인 라우팅은 선택한 비공개 Slack 채널에 저장됩니다."
     ),
-    "manage_rules": "Manage Rules / 규칙 관리",
-    "manage_admins": "Manage Admins / 관리자 설정",
-    "configure_rules": "Approval Rules / 승인 규칙",
+    "manage_rules": "System Configuration / 시스템 설정",
+    "manage_roles": "Access Roles / 접근 역할",
+    "configure_rules": "Approval Routing / 승인 라우팅",
     "admin_menu_notice": (
         "Only system administrators can change runtime configuration.\n"
         "시스템 관리자만 실행 중 설정을 변경할 수 있습니다."
     ),
-    "select_rule": "Select Rule / 규칙 선택",
-    "approval_rule_title": "Approval Rule / 승인 규칙",
+    "select_rule": "Select Route / 라우팅 선택",
+    "approval_rule_title": "Approval Routing / 승인 라우팅",
+    "workflow": "Workflow / 업무 절차",
+    "required_roles": "Required Roles / 필요 역할",
+    "assigned_members": "Assigned Members / 배정된 담당자",
     "approval_channel": "Approval Channel / 승인 채널",
     "private_channel_only": (
         "Select a private channel that the app has joined.\n앱이 참여한 비공개 채널을 선택해주세요."
     ),
-    "step_name_en": "Step Name (English) / 단계명 영문",
-    "step_name_ko": "Step Name (Korean) / 단계명 국문",
-    "step_approvers": "Eligible Approvers / 승인 가능자",
-    "any_approver_notice": (
-        "Any one selected approver can complete the step. Empty steps are saved as incomplete.\n"
-        "선택된 승인자 중 한 명이 처리합니다. 미지정 단계는 설정 미완료로 저장됩니다."
-    ),
-    "add_step": "Add Step / 단계 추가",
-    "remove_step": "Remove / 삭제",
     "save": "Save / 저장",
-    "rule_saved": "Approval rule saved. / 승인 규칙을 저장했습니다.",
+    "rule_saved": "Approval route saved. / 승인 라우팅을 저장했습니다.",
     "rule_saved_incomplete": (
-        "Approval rule saved as incomplete because one or more steps have no approver.\n"
-        "승인자가 없는 단계가 있어 설정 미완료 상태로 저장했습니다."
+        "The route was saved, but one or more required roles have no assigned member.\n"
+        "라우팅은 저장했지만 필수 Role 중 담당자가 없는 항목이 있습니다."
     ),
     "channel_membership_error": (
-        "The app and every selected approver must be members of the private approval channel.\n"
-        "앱과 선택한 모든 승인자는 비공개 승인 채널의 멤버여야 합니다."
+        "The app and every member assigned to a required role must be in the private approval "
+        "channel.\n"
+        "앱과 필수 역할에 배정된 모든 담당자는 비공개 승인 채널의 멤버여야 합니다."
     ),
-    "admin_title": "System Admins / 관리자",
-    "system_admins": "System Administrators / 시스템 관리자",
+    "roles_title": "Access Roles / 접근 역할",
+    "role_requesters": "Eligible Requesters / 신청 가능자",
+    "role_student_coordinators": "Student Coordinators / 학생 담당자",
+    "role_professors": "Professors / 교수",
+    "role_admin_staff": "Administrative Staff / 행정팀",
+    "role_system_admins": "System Administrators / 시스템 관리자",
+    "workspace_roles": "Workspace / 전체 워크스페이스",
+    "role_configuration_notice": (
+        "Workflow steps are defined in policy configuration; assign actual members to roles here.\n"
+        "Workflow 단계는 정책 configuration에 정의되며, 여기서 Role의 실제 담당자를 배정합니다."
+    ),
     "admin_required": "Select at least one administrator. / 관리자를 한 명 이상 선택해주세요.",
-    "admins_saved": "System administrators updated. / 시스템 관리자를 변경했습니다.",
+    "roles_saved": "Access roles updated. / 접근 역할을 변경했습니다.",
     "request_title": "Expense Request {reference}",
     "category": "Category / 지출 항목",
     "status": "Status / 상태",
@@ -149,6 +153,10 @@ STRINGS = {
     "decision_title": "Approval Action / 승인 처리",
     "unauthorized": (
         "You are not authorized to approve this request.\n이 요청을 승인할 권한이 없습니다."
+    ),
+    "requester_role_required": (
+        "An administrator must add you as an eligible requester before you can submit requests.\n"
+        "관리자가 신청 가능자로 추가한 후에 신청할 수 있습니다."
     ),
     "not_applicant": (
         "Only the applicant can update this request.\n신청자 본인만 이 요청을 수정할 수 있습니다."
@@ -198,7 +206,6 @@ STRINGS = {
         "The Slack interaction expired while the form was loading. Please try again.\n"
         "양식을 불러오는 동안 Slack 상호작이 만료되었습니다. 다시 시도해주세요."
     ),
-    "configuration_loading": ("Loading the current configuration…\n현재 설정을 불러오는 중입니다…"),
     "configuration_load_error": (
         "The configuration could not be loaded. Please close this window and try again.\n"
         "설정을 불러오지 못했습니다. 창을 닫고 다시 시도해주세요."
@@ -222,8 +229,8 @@ STRINGS = {
         "선택한 항목에 유효한 승인 설정이 없습니다."
     ),
     "approval_configuration_required": (
-        "No approval rule. Admin: App Home → System Administration → Approval Rules.\n"
-        "승인 규칙이 없습니다. 관리자가 App Home → 시스템 관리 → 승인 규칙에서 설정해주세요."
+        "Approval routing or required role assignments are incomplete.\n"
+        "승인 라우팅 또는 필수 Role 담당자 설정이 완료되지 않았습니다."
     ),
     "validation_error": "Please review the entered values. / 입력값을 확인해주세요.",
     "student_id_required": "Student ID is required for students. / 학생은 학번을 입력해야 합니다.",

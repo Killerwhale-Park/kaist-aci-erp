@@ -36,10 +36,9 @@ scope를 변경했다면 앱을 workspace에 다시 설치합니다. 봇은 사�
 ```text
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
-BOOTSTRAP_SYSTEM_ADMIN_SLACK_USER_IDS=U...
 ```
 
-`BOOTSTRAP_SYSTEM_ADMIN_SLACK_USER_IDS`는 Slack 내부 관리자 설정이 생기기 전 최초 1회에만 사용됩니다. 채널 ID는 환경변수로 관리하지 않습니다.
+최초 복구 관리자는 `app/config/roles.py`의 Role Configuration에 명시합니다. 추가 신청 가능자, 교수, 행정팀, 시스템 관리자는 Slack App Home의 `Access Roles / 접근 역할`에서 관리합니다. 채널 ID는 환경변수로 관리하지 않습니다.
 
 ## Vercel 배포
 
@@ -65,7 +64,7 @@ Slack App 설정의 다음 세 Request URL에는 모두 아래 주소를 넣습�
 https://kaist-aci-erp.vercel.app/slack/events
 ```
 
-이후 App Home의 `Manage Approval Rules`에서 학과·카테고리별 승인 채널, 승인 단계와 승인자를 설정합니다.
+이후 App Home의 `System Configuration`에서 학과·재원 항목별 승인 채널과 Role 담당자를 설정합니다. Workflow 단계는 `app/config/workflows.py`, 재원→workflow 연결은 `app/config/workflow_mappings.py`에 독립적으로 정의됩니다.
 
 ## Slack 사용
 
@@ -78,6 +77,8 @@ App Home에서 다음 작업을 시작합니다.
 예산 분류는 고정된 단계 수를 사용하지 않습니다. 설정된 트리에 따라 2단계, 3단계, 5단계 모두 같은 방식으로 표시되며 최종 지출항목을 선택해야 제출할 수 있습니다.
 
 재원 항목과 증빙 양식은 독립된 설정입니다. 최종 재원 항목과 양식을 mapping하므로 같은 항목명도 재원 경로에 따라 다른 양식을 사용할 수 있고, 같은 양식을 여러 경로가 재사용할 수도 있습니다.
+
+학과별 예산과 학과 학생회 예산은 공통 기본 양식을 사용하되 학과별 override를 둘 수 있습니다. 단과대 예산은 global scope이므로 신청자 학과와 관계없이 하나의 mapping을 사용합니다.
 
 구매 요청과 정산 요청은 같은 채널 또는 서로 다른 채널로 보낼 수 있습니다. 선택 가능한 비공개 채널에는 봇을 `/invite @Expense Support ERP`로 미리 초대합니다. 승인 채널에는 승인자도 모두 참여해야 합니다.
 

@@ -11,53 +11,74 @@ def app_home_view(
     own_requests: list[ExpenseRequest],
     pending_approvals: list[ExpenseRequest],
     can_assign_settlement: bool = False,
+    can_submit_requests: bool = False,
 ) -> dict:
     blocks: list[dict] = [
-        {"type": "header", "text": {"type": "plain_text", "text": t("app_title")}},
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": "new_expense_request",
-                    "style": "primary",
-                    "text": {"type": "plain_text", "text": f"+ {t('new_request')}"},
-                    "value": "new",
-                }
-            ],
-        },
-        {"type": "divider"},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{t('work_requests')}*"}},
-        {
-            "type": "actions",
-            "elements": [
+        {"type": "header", "text": {"type": "plain_text", "text": t("app_title")}}
+    ]
+    if can_submit_requests:
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": "new_expense_request",
+                        "style": "primary",
+                        "text": {"type": "plain_text", "text": f"+ {t('new_request')}"},
+                        "value": "new",
+                    }
+                ],
+            }
+        )
+    if can_submit_requests or can_assign_settlement:
+        work_request_actions = []
+        if can_submit_requests:
+            work_request_actions.append(
                 {
                     "type": "button",
                     "action_id": "new_purchase_work_request",
                     "text": {"type": "plain_text", "text": t("new_purchase_request")},
                     "value": "purchase",
+                }
+            )
+        if can_assign_settlement:
+            work_request_actions.append(
+                {
+                    "type": "button",
+                    "action_id": "new_settlement_work_request",
+                    "text": {"type": "plain_text", "text": t("new_settlement_request")},
+                    "value": "settlement",
+                }
+            )
+        blocks.extend(
+            [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{t('work_requests')}*"},
                 },
-                *(
-                    [
-                        {
-                            "type": "button",
-                            "action_id": "new_settlement_work_request",
-                            "text": {
-                                "type": "plain_text",
-                                "text": t("new_settlement_request"),
-                            },
-                            "value": "settlement",
-                        }
-                    ]
-                    if can_assign_settlement
-                    else []
-                ),
-            ],
-        },
-        {"type": "divider"},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{t('available_programs')}*"}},
-    ]
-    for budget in budgets:
+                {"type": "actions", "elements": work_request_actions},
+            ]
+        )
+    if not can_submit_requests:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": t("requester_role_required")},
+            }
+        )
+    if can_submit_requests:
+        blocks.extend(
+            [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{t('available_programs')}*"},
+                },
+            ]
+        )
+    for budget in budgets if can_submit_requests else []:
         text = f"*{display_name(escape_mrkdwn(budget.name_en), escape_mrkdwn(budget.name_ko))}*"
         if budget.is_available:
             blocks.append(

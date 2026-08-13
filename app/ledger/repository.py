@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from dataclasses import replace
 from typing import Any
 
-from app.config.budgets import LEGACY_BUDGET_IDS
+from app.config.roles import (
+    ASSIGN_SETTLEMENT,
+    MANAGE_CONFIGURATION,
+    SUBMIT_REQUEST,
+    SYSTEM_ADMIN_ROLE,
+    WORKSPACE_ROLE_SCOPE,
+    default_role_assignments,
+    empty_role_set,
+    role_ids,
+    roles_with_capability,
+)
 from app.config.settings import Settings
-from app.domain.catalog import categories, default_rule
+from app.domain.catalog import category_by_id, workflow_for_budget_node
 from app.domain.enums import WorkRequestStatus
 from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest, WorkRequest
 from app.domain.work_requests import (
@@ -37,19 +49,33 @@ WORK_REQUEST_EVENT_CHUNK = "work_request_event_chunk"
 CONFIG_ROOT = "configuration_record"
 CONFIG_CHUNK = "configuration_chunk"
 RULE_SAVED = "RULE_SAVED"
-SYSTEM_ADMINS_SAVED = "SYSTEM_ADMINS_SAVED"
+ROLE_ASSIGNMENTS_SAVED = "ROLE_ASSIGNMENTS_SAVED"
 CHANNEL_ID = "_channel_id"
+CACHE_TTL_SECONDS = 30.0
+
+_SHARED_CHANNEL_CACHE: dict[int, tuple[float, list[str]]] = {}
+_SHARED_HISTORY_CACHE: dict[tuple[int, str], tuple[float, list[dict]]] = {}
 
 
 class SlackLedgerRepository:
     def __init__(self, client, settings: Settings) -> None:
         self.client = client
         self.settings = settings
+        token = getattr(client, "token", None)
+        self._shared_cache_key = hash(token) if token else id(client)
         self._channel_cache: list[str] | None = None
         self._history_cache: dict[str, list[dict]] = {}
 
+    @staticmethod
+    def _cache_is_fresh(stored_at: float) -> bool:
+        return time.monotonic() - stored_at < CACHE_TTL_SECONDS
+
     async def _channel_ids(self) -> list[str]:
         if self._channel_cache is not None:
+            return self._channel_cache
+        shared = _SHARED_CHANNEL_CACHE.get(self._shared_cache_key)
+        if shared and self._cache_is_fresh(shared[0]):
+            self._channel_cache = list(shared[1])
             return self._channel_cache
 
         channel_ids: list[str] = []
@@ -69,10 +95,19 @@ class SlackLedgerRepository:
             cursor = response.get("response_metadata", {}).get("next_cursor") or None
             if not cursor:
                 self._channel_cache = sorted(set(channel_ids))
+                _SHARED_CHANNEL_CACHE[self._shared_cache_key] = (
+                    time.monotonic(),
+                    list(self._channel_cache),
+                )
                 return self._channel_cache
 
     async def _history(self, channel_id: str) -> list[dict]:
         if channel_id in self._history_cache:
+            return self._history_cache[channel_id]
+        shared_key = (self._shared_cache_key, channel_id)
+        shared = _SHARED_HISTORY_CACHE.get(shared_key)
+        if shared and self._cache_is_fresh(shared[0]):
+            self._history_cache[channel_id] = list(shared[1])
             return self._history_cache[channel_id]
 
         messages: list[dict] = []
@@ -88,6 +123,7 @@ class SlackLedgerRepository:
             cursor = response.get("response_metadata", {}).get("next_cursor") or None
             if not cursor:
                 self._history_cache[channel_id] = messages
+                _SHARED_HISTORY_CACHE[shared_key] = (time.monotonic(), list(messages))
                 return messages
 
     async def _thread(self, channel_id: str, root_ts: str) -> list[dict]:
@@ -108,6 +144,7 @@ class SlackLedgerRepository:
 
     def _invalidate_history(self, channel_id: str) -> None:
         self._history_cache.pop(channel_id, None)
+        _SHARED_HISTORY_CACHE.pop((self._shared_cache_key, channel_id), None)
 
     @staticmethod
     def _metadata(message: dict) -> tuple[str | None, dict[str, Any]]:
@@ -389,6 +426,27 @@ class SlackLedgerRepository:
         return matches
 
     async def _configuration_data(self, root: dict, record_type: str) -> dict[str, Any]:
+        _, root_payload = self._metadata(root)
+        inline_record = root_payload.get("inline_record")
+        if isinstance(inline_record, dict):
+            inline_records = decode_chunks(
+                [
+                    {
+                        "ts": root.get("ts", ""),
+                        "metadata": {
+                            "event_type": CONFIG_CHUNK,
+                            "event_payload": inline_record,
+                        },
+                    }
+                ],
+                event_type=CONFIG_CHUNK,
+            )
+            inline = next(
+                (item for item in inline_records if item["record_type"] == record_type), None
+            )
+            if inline is not None:
+                return inline["data"]
+
         records = decode_chunks(
             await self._thread(root[CHANNEL_ID], root["ts"]), event_type=CONFIG_CHUNK
         )
@@ -398,169 +456,217 @@ class SlackLedgerRepository:
         return record["data"]
 
     async def get_rule(self, department_id: str, category_id: str) -> ApprovalRule:
+        category = category_by_id(category_id, department_id)
+        workflow = workflow_for_budget_node(category_id, department_id)
+        if category is None or workflow is None:
+            raise EntityNotFoundError("Approval workflow mapping not found")
+
         key = f"{department_id}:{category_id}"
-        roots = await self._configuration_roots("approval_rule", key)
+        roots = await self._configuration_roots("approval_route", key)
+        if not roots:
+            roots = await self._configuration_roots("approval_rule", key)
+        approval_channel_id = None
+        version = 0
         for root in roots:
             try:
                 data = await self._configuration_data(root, RULE_SAVED)
             except ConfigurationError:
                 continue
-            return ApprovalRule(
-                department_id=data["department_id"],
-                budget_program_id=LEGACY_BUDGET_IDS.get(
-                    data["budget_program_id"], data["budget_program_id"]
-                ),
-                category_id=data["category_id"],
-                approval_channel_id=data["approval_channel_id"],
-                steps=tuple(
-                    ApprovalRuleStep(
-                        name_en=item["name_en"],
-                        name_ko=item["name_ko"],
-                        approver_slack_user_ids=tuple(item["approver_slack_user_ids"]),
-                    )
-                    for item in data["steps"]
-                ),
-                version=int(data["version"]),
+            approval_channel_id = data.get("approval_channel_id")
+            version = int(data.get("version", 0))
+            break
+
+        steps = []
+        for step in workflow.steps:
+            approvers: set[str] = set()
+            for role in step.approver_roles:
+                approvers.update(await self.role_user_ids(role, department_id))
+            steps.append(
+                ApprovalRuleStep(
+                    name_en=step.name_en,
+                    name_ko=step.name_ko,
+                    approver_slack_user_ids=tuple(sorted(approvers)),
+                    approver_roles=step.approver_roles,
+                )
             )
+        return ApprovalRule(
+            department_id=department_id,
+            budget_program_id=category.budget_program_id,
+            category_id=category_id,
+            approval_channel_id=approval_channel_id,
+            steps=tuple(steps),
+            workflow_id=workflow.id,
+            workflow_name_en=workflow.name_en,
+            workflow_name_ko=workflow.name_ko,
+            version=version,
+        )
 
-        rule = default_rule(department_id, category_id)
-        if rule is None:
-            raise EntityNotFoundError("Approval rule not found")
-        return rule
-
-    async def save_rule(self, actor: str, rule: ApprovalRule) -> ApprovalRule:
+    async def save_approval_route(
+        self, actor: str, department_id: str, category_id: str, approval_channel_id: str
+    ) -> ApprovalRule:
         await self.assert_system_admin(actor)
-        if not rule.approval_channel_id:
+        if not approval_channel_id:
             raise ConfigurationError("Approval channel is required")
-        if rule.approval_channel_id not in await self._channel_ids():
+        if approval_channel_id not in await self._channel_ids():
             raise ConfigurationError("The app is not a member of the approval channel")
 
-        admins = await self.system_admin_ids()
-        try:
-            previous = await self.get_rule(rule.department_id, rule.category_id)
-        except EntityNotFoundError:
-            previous = None
-        stored = ApprovalRule(
-            department_id=rule.department_id,
-            budget_program_id=LEGACY_BUDGET_IDS.get(rule.budget_program_id, rule.budget_program_id),
-            category_id=rule.category_id,
-            approval_channel_id=rule.approval_channel_id,
-            steps=rule.steps,
-            version=(previous.version if previous else 0) + 1,
-        )
+        current = await self.get_rule(department_id, category_id)
         data = {
-            "department_id": stored.department_id,
-            "budget_program_id": stored.budget_program_id,
-            "category_id": stored.category_id,
-            "approval_channel_id": stored.approval_channel_id,
-            "version": stored.version,
-            "steps": [
-                {
-                    "name_en": step.name_en,
-                    "name_ko": step.name_ko,
-                    "approver_slack_user_ids": list(step.approver_slack_user_ids),
-                }
-                for step in stored.steps
-            ],
+            "department_id": department_id,
+            "budget_program_id": current.budget_program_id,
+            "category_id": category_id,
+            "approval_channel_id": approval_channel_id,
+            "version": current.version + 1,
         }
-        key = f"{stored.department_id}:{stored.category_id}"
+        encoded = encode_chunks(record_type=RULE_SAVED, data=data)
+        inline_record = encoded[0] if len(encoded) == 1 else None
+        key = f"{department_id}:{category_id}"
         response = await self.client.chat_postMessage(
-            channel=stored.approval_channel_id,
-            text=f"Approval workflow updated: {key} (version {stored.version})",
+            channel=approval_channel_id,
+            text=f"Approval route updated: {key} (version {current.version + 1})",
             metadata={
                 "event_type": CONFIG_ROOT,
                 "event_payload": {
                     "version": 1,
-                    "configuration_type": "approval_rule",
+                    "configuration_type": "approval_route",
                     "key": key,
-                    "configuration_version": stored.version,
+                    "configuration_version": current.version + 1,
+                    **({"inline_record": inline_record} if inline_record else {}),
                 },
             },
         )
-        self._invalidate_history(stored.approval_channel_id)
-        await self._append_chunks(
-            channel_id=stored.approval_channel_id,
-            root_ts=response["ts"],
-            metadata_event_type=CONFIG_CHUNK,
-            record_type=RULE_SAVED,
-            data=data,
-            audit_text=f"Approval rule saved by <@{actor}>",
+        self._invalidate_history(approval_channel_id)
+        if inline_record is None:
+            await self._append_chunks(
+                channel_id=approval_channel_id,
+                root_ts=response["ts"],
+                metadata_event_type=CONFIG_CHUNK,
+                record_type=RULE_SAVED,
+                data=data,
+                audit_text=f"Approval route saved by <@{actor}>",
+            )
+        return replace(
+            current,
+            approval_channel_id=approval_channel_id,
+            version=current.version + 1,
         )
-        await self._write_admin_record(stored.approval_channel_id, actor, admins)
-        return stored
 
-    async def system_admin_ids(self) -> set[str]:
-        roots = await self._configuration_roots("system_admins", "workspace")
+    async def role_assignments(self) -> dict[str, dict[str, set[str]]]:
+        assignments = default_role_assignments()
+        roots = await self._configuration_roots("access_roles", "workspace")
         for root in roots:
             try:
-                data = await self._configuration_data(root, SYSTEM_ADMINS_SAVED)
+                data = await self._configuration_data(root, ROLE_ASSIGNMENTS_SAVED)
             except ConfigurationError:
                 continue
-            return set(data["slack_user_ids"])
-        return self.settings.bootstrap_system_admin_ids
+            for scope, stored_roles in data.get("scopes", {}).items():
+                scoped = assignments.setdefault(scope, empty_role_set())
+                for role_id in role_ids():
+                    scoped[role_id].update(stored_roles.get(role_id, []))
+            return assignments
+        return assignments
 
-    async def assert_system_admin(self, actor: str) -> None:
-        if actor not in await self.system_admin_ids():
-            raise ApprovalPermissionError("System administrator role required")
+    async def role_user_ids(self, role_id: str, department_id: str | None = None) -> set[str]:
+        assignments = await self.role_assignments()
+        users = set(assignments.get(WORKSPACE_ROLE_SCOPE, empty_role_set()).get(role_id, set()))
+        if department_id:
+            users.update(assignments.get(department_id, empty_role_set()).get(role_id, set()))
+        return users
 
-    async def settlement_assigner_ids(self) -> set[str]:
-        allowed = set(await self.system_admin_ids())
-        valid_category_ids = {item.id for item in categories()}
-        seen: set[str] = set()
-        for root in await self._roots(CONFIG_ROOT):
-            _, payload = self._metadata(root)
-            if payload.get("configuration_type") != "approval_rule":
-                continue
-            key = str(payload.get("key") or "")
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            try:
-                data = await self._configuration_data(root, RULE_SAVED)
-            except ConfigurationError:
-                continue
-            if data.get("category_id") not in valid_category_ids:
-                continue
-            for step in data.get("steps", []):
-                allowed.update(step.get("approver_slack_user_ids", []))
+    async def system_admin_ids(self) -> set[str]:
+        return await self.users_with_capability(MANAGE_CONFIGURATION)
+
+    async def users_with_capability(
+        self, capability: str, department_id: str | None = None
+    ) -> set[str]:
+        assignments = await self.role_assignments()
+        scopes = (WORKSPACE_ROLE_SCOPE, department_id) if department_id else tuple(assignments)
+        allowed: set[str] = set()
+        for scope in scopes:
+            scoped = assignments.get(scope, {})
+            for role_id in roles_with_capability(capability):
+                allowed.update(scoped.get(role_id, set()))
         return allowed
 
-    async def assert_can_assign_settlement(self, actor: str) -> None:
-        if actor not in await self.settlement_assigner_ids():
+    async def assert_system_admin(self, actor: str) -> None:
+        if actor in default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]:
+            return
+        if actor not in await self.users_with_capability(MANAGE_CONFIGURATION):
+            raise ApprovalPermissionError("System administrator role required")
+
+    async def assert_can_submit_request(self, actor: str, department_id: str | None = None) -> None:
+        if actor in default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]:
+            return
+        if actor not in await self.users_with_capability(SUBMIT_REQUEST, department_id):
+            raise ApprovalPermissionError("Requester role required")
+
+    async def settlement_assigner_ids(self, department_id: str | None = None) -> set[str]:
+        return await self.users_with_capability(ASSIGN_SETTLEMENT, department_id)
+
+    async def assert_can_assign_settlement(
+        self, actor: str, department_id: str | None = None
+    ) -> None:
+        if actor in default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]:
+            return
+        if actor not in await self.settlement_assigner_ids(department_id):
             raise ApprovalPermissionError("Approval or administrator role required")
 
-    async def _write_admin_record(
-        self, channel_id: str, actor: str, slack_user_ids: set[str]
+    async def _write_role_record(
+        self,
+        channel_id: str,
+        actor: str,
+        assignments: dict[str, dict[str, set[str]]],
     ) -> None:
+        data = {
+            "scopes": {
+                scope: {role_id: sorted(scoped.get(role_id, set())) for role_id in role_ids()}
+                for scope, scoped in assignments.items()
+            }
+        }
+        encoded = encode_chunks(record_type=ROLE_ASSIGNMENTS_SAVED, data=data)
+        inline_record = encoded[0] if len(encoded) == 1 else None
         response = await self.client.chat_postMessage(
             channel=channel_id,
-            text="System administrators updated",
+            text="Access role configuration updated",
             metadata={
                 "event_type": CONFIG_ROOT,
                 "event_payload": {
                     "version": 1,
-                    "configuration_type": "system_admins",
+                    "configuration_type": "access_roles",
                     "key": "workspace",
+                    **({"inline_record": inline_record} if inline_record else {}),
                 },
             },
         )
         self._invalidate_history(channel_id)
-        await self._append_chunks(
-            channel_id=channel_id,
-            root_ts=response["ts"],
-            metadata_event_type=CONFIG_CHUNK,
-            record_type=SYSTEM_ADMINS_SAVED,
-            data={"slack_user_ids": sorted(slack_user_ids)},
-            audit_text=f"System administrators saved by <@{actor}>",
-        )
+        if inline_record is None:
+            await self._append_chunks(
+                channel_id=channel_id,
+                root_ts=response["ts"],
+                metadata_event_type=CONFIG_CHUNK,
+                record_type=ROLE_ASSIGNMENTS_SAVED,
+                data=data,
+                audit_text=f"Access roles saved by <@{actor}>",
+            )
 
-    async def replace_system_admins(self, actor: str, slack_user_ids: list[str]) -> None:
+    async def replace_role_assignments(
+        self,
+        actor: str,
+        assignments: dict[str, dict[str, set[str]]],
+    ) -> None:
         await self.assert_system_admin(actor)
-        selected = set(slack_user_ids)
-        if not selected:
+        configured_roots = default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]
+        normalized = {
+            scope: {role_id: set(scoped.get(role_id, set())) for role_id in role_ids()}
+            for scope, scoped in assignments.items()
+        }
+        workspace = normalized.setdefault(WORKSPACE_ROLE_SCOPE, empty_role_set())
+        workspace[SYSTEM_ADMIN_ROLE].update(configured_roots)
+        if not workspace[SYSTEM_ADMIN_ROLE]:
             raise ConfigurationError("At least one administrator is required")
         channel_ids = await self._channel_ids()
         if not channel_ids:
             raise ConfigurationError("The app must join at least one private channel")
-        for channel_id in channel_ids:
-            await self._write_admin_record(channel_id, actor, selected)
+        await asyncio.gather(
+            *(self._write_role_record(channel_id, actor, normalized) for channel_id in channel_ids)
+        )

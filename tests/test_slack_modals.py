@@ -1,3 +1,10 @@
+from app.config.roles import (
+    ADMIN_STAFF_ROLE,
+    PROFESSOR_ROLE,
+    REQUESTER_ROLE,
+    SYSTEM_ADMIN_ROLE,
+    empty_role_set,
+)
 from app.domain.enums import ApplicantType, EvidenceRequirementLevel, EvidenceTiming
 from app.domain.models import (
     BudgetNode,
@@ -6,11 +13,10 @@ from app.domain.models import (
 )
 from app.slack.modals import (
     approval_rule_editor_modal,
-    configuration_loading_modal,
     configuration_notice_modal,
     expense_context_modal,
     expense_details_modal,
-    system_admins_modal,
+    role_configuration_modal,
 )
 
 
@@ -156,20 +162,34 @@ def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
         "department_1",
         "supplies",
         "C_PRIVATE",
+        "Academic Development Approval",
+        "학사계발비 승인",
         [
             {
                 "name_en": "Professor Approval",
                 "name_ko": "교수 승인",
                 "approver_slack_user_ids": ["U_PROFESSOR_A", "U_PROFESSOR_B"],
+                "approver_roles": [PROFESSOR_ROLE],
             }
         ],
     )
-    admins = system_admins_modal(["U_ADMIN_A", "U_ADMIN_B"])
+    roles = role_configuration_modal(
+        {
+            "workspace": {SYSTEM_ADMIN_ROLE: {"U_ADMIN_A", "U_ADMIN_B"}},
+            "department_1": {
+                REQUESTER_ROLE: {"U_REQUESTER"},
+                PROFESSOR_ROLE: {"U_PROFESSOR_A", "U_PROFESSOR_B"},
+                ADMIN_STAFF_ROLE: {"U_STAFF"},
+            },
+        },
+        [Department("department_1", "AI Computing", "AI Computing")],
+    )
 
     editor_elements = [block.get("element") for block in editor["blocks"] if block.get("element")]
     assert any(element["type"] == "conversations_select" for element in editor_elements)
-    assert any(element["type"] == "multi_users_select" for element in editor_elements)
-    assert admins["blocks"][0]["element"]["type"] == "multi_users_select"
+    role_inputs = [block for block in roles["blocks"] if block["type"] == "input"]
+    assert len(role_inputs) == 5
+    assert all(block["element"]["type"] == "multi_users_select" for block in role_inputs)
     assert len(editor["blocks"]) <= 100
 
 
@@ -185,25 +205,26 @@ def test_every_modal_with_input_blocks_has_a_submit_button() -> None:
             "department_1",
             "supplies",
             None,
+            "Approval Workflow",
+            "승인 절차",
             [
                 {
                     "name_en": "Approval",
                     "name_ko": "승인",
                     "approver_slack_user_ids": [],
+                    "approver_roles": [PROFESSOR_ROLE],
                 }
             ],
         ),
-        system_admins_modal([]),
+        role_configuration_modal({"workspace": empty_role_set()}, [department]),
     ]
     for view in views:
         if any(block.get("type") == "input" for block in view["blocks"]):
             assert view.get("submit"), view["callback_id"]
 
 
-def test_configuration_progress_views_do_not_require_input() -> None:
-    loading = configuration_loading_modal()
+def test_configuration_notice_view_does_not_require_input() -> None:
     notice = configuration_notice_modal("Unable to load / 불러오기 실패")
 
-    assert loading["callback_id"] == "configuration_loading"
     assert notice["callback_id"] == "configuration_notice"
-    assert all(block["type"] != "input" for block in loading["blocks"] + notice["blocks"])
+    assert all(block["type"] != "input" for block in notice["blocks"])

@@ -143,6 +143,8 @@ def created_event_data(
                 "name_en": step.name_en,
                 "name_ko": step.name_ko,
                 "approver_slack_user_ids": list(step.approver_slack_user_ids),
+                "approver_roles": list(step.approver_roles),
+                "workflow_id": rule.workflow_id,
             }
             for index, step in enumerate(rule.steps, start=1)
         ],

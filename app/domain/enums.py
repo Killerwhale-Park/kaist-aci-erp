@@ -6,6 +6,11 @@ class UserRole(StrEnum):
     SYSTEM_ADMIN = "SYSTEM_ADMIN"
 
 
+class BudgetFormScope(StrEnum):
+    DEPARTMENT = "DEPARTMENT"
+    GLOBAL = "GLOBAL"
+
+
 class ApplicantType(StrEnum):
     STUDENT = "STUDENT"
     PROFESSOR = "PROFESSOR"
