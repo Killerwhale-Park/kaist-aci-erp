@@ -19,7 +19,7 @@ async def test_rule_and_administrators_are_stored_in_slack_messages(
         "U_ADMIN",
         ApprovalRule(
             department_id="department_1",
-            budget_program_id="student_support",
+            budget_program_id="department_budget",
             category_id="airfare",
             approval_channel_id="C_APPROVAL",
             steps=(

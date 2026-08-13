@@ -14,8 +14,16 @@ from app.domain.catalog import (
     department_by_id,
     departments,
 )
-from app.domain.enums import ApplicantType, EvidenceTiming, RequestStatus, UserRole
+from app.domain.enums import (
+    ApplicantType,
+    EvidenceTiming,
+    RequestStatus,
+    UserRole,
+    WorkRequestKind,
+    WorkRequestStatus,
+)
 from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest, UserProfile
+from app.domain.work_requests import purchase_created_data, settlement_created_data
 from app.domain.workflow import (
     APPROVAL_STEP_APPROVED,
     CHANGES_REQUESTED,
@@ -44,7 +52,12 @@ from app.expenses.schemas import (
 from app.i18n import t
 from app.ledger import SlackLedgerRepository
 from app.slack.home import app_home_view
-from app.slack.messages import request_fallback_text, request_message_blocks
+from app.slack.messages import (
+    request_fallback_text,
+    request_message_blocks,
+    work_request_blocks,
+    work_request_fallback_text,
+)
 from app.slack.modals import (
     administration_modal,
     approval_decision_modal,
@@ -54,10 +67,13 @@ from app.slack.modals import (
     expense_context_modal,
     expense_details_modal,
     post_evidence_modal,
+    purchase_request_modal,
     request_details_modal,
+    settlement_request_modal,
     system_admins_modal,
 )
 from app.slack.utils import state_selected_users, state_value
+from app.work_requests import CreatePurchaseRequestCommand, CreateSettlementRequestCommand
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +82,20 @@ def register_handlers(slack_app, settings: Settings) -> None:
     def repository(client) -> SlackLedgerRepository:
         return SlackLedgerRepository(client, settings)
 
-    async def open_new_request(client, trigger_id: str, slack_user_id: str) -> None:
+    async def open_new_request(
+        client,
+        trigger_id: str,
+        slack_user_id: str,
+        initial_department_id: str | None = None,
+        source_work_request_id: str | None = None,
+    ) -> None:
         view = expense_context_modal(
             slack_user_id,
             departments(),
             [item for item in budgets() if item.is_available],
             categories(),
+            initial_department_id,
+            source_work_request_id,
         )
         await client.views_open(trigger_id=trigger_id, view=view)
 
@@ -87,6 +111,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             budgets(),
             await ledger.list_for_applicant(slack_user_id),
             await ledger.list_pending_for_actor(slack_user_id),
+            slack_user_id in await ledger.settlement_assigner_ids(),
         )
         await client.views_publish(user_id=slack_user_id, view=view)
 
@@ -97,6 +122,14 @@ def register_handlers(slack_app, settings: Settings) -> None:
             request,
             text=text,
             blocks=request_message_blocks(request),
+        )
+        return request
+
+    async def synchronize_work_request_message(client, request):
+        await repository(client).update_work_request_view(
+            request,
+            text=work_request_fallback_text(request),
+            blocks=work_request_blocks(request),
         )
         return request
 
@@ -363,9 +396,207 @@ def register_handlers(slack_app, settings: Settings) -> None:
         await ack()
         await open_new_request(client, body["trigger_id"], body["user"]["id"])
 
+    @slack_app.action("new_purchase_work_request")
+    async def new_purchase_work_request(ack, body, client):
+        await ack()
+        await client.views_open(
+            trigger_id=body["trigger_id"], view=purchase_request_modal(departments())
+        )
+
+    @slack_app.action("new_settlement_work_request")
+    async def new_settlement_work_request(ack, body, client):
+        await ack()
+        actor = body["user"]["id"]
+        try:
+            await repository(client).assert_can_assign_settlement(actor)
+        except ApprovalPermissionError:
+            await safe_dm(client, actor, t("unauthorized"))
+            return
+        await client.views_open(
+            trigger_id=body["trigger_id"], view=settlement_request_modal(departments())
+        )
+
+    @slack_app.view("purchase_request_create")
+    async def submit_purchase_request(ack, body, client):
+        actor = body["user"]["id"]
+        state = body["view"]["state"]
+        try:
+            command = CreatePurchaseRequestCommand(
+                requester_slack_user_id=actor,
+                department_id=state_value(state, "work_department"),
+                assignee_slack_user_id=state_value(state, "purchase_assignee"),
+                channel_id=state_value(state, "work_channel"),
+                item_name=state_value(state, "item_name"),
+                product_url=state_value(state, "product_url"),
+                quantity=state_value(state, "quantity"),
+                estimated_amount=state_value(state, "estimated_amount"),
+                purpose=state_value(state, "work_purpose"),
+            )
+            department = department_by_id(command.department_id)
+            if department is None:
+                raise ConfigurationError
+        except ValidationError as error:
+            field_blocks = {
+                "department_id": "work_department",
+                "assignee_slack_user_id": "purchase_assignee",
+                "channel_id": "work_channel",
+                "purpose": "work_purpose",
+            }
+            errors = {
+                field_blocks.get(str(issue["loc"][0]), str(issue["loc"][0])): (
+                    t("https_required")
+                    if str(issue["loc"][0]) == "product_url"
+                    else t("validation_error")
+                )
+                for issue in error.errors()
+            }
+            await ack(response_action="errors", errors=errors)
+            return
+        except ConfigurationError:
+            await ack(
+                response_action="errors",
+                errors={"work_department": t("configuration_error")},
+            )
+            return
+        await ack()
+        try:
+            ledger = repository(client)
+            request = await ledger.create_work_request(purchase_created_data(command, department))
+            request = await synchronize_work_request_message(client, request)
+        except ConfigurationError:
+            await safe_dm(client, actor, t("channel_unavailable"))
+            return
+        except Exception:
+            logger.exception("Failed to create a purchase request")
+            await safe_dm(client, actor, t("submission_error"))
+            return
+        await safe_dm(client, actor, t("purchase_request_sent", reference=request.reference_number))
+        await safe_dm(
+            client,
+            request.assignee_slack_user_id,
+            t("purchase_assignment_notice", reference=request.reference_number),
+            work_request_blocks(request),
+        )
+
+    @slack_app.view("settlement_request_create")
+    async def submit_settlement_request(ack, body, client):
+        actor = body["user"]["id"]
+        state = body["view"]["state"]
+        try:
+            command = CreateSettlementRequestCommand(
+                requester_slack_user_id=actor,
+                department_id=state_value(state, "work_department"),
+                assignee_slack_user_id=state_value(state, "settlement_assignee"),
+                channel_id=state_value(state, "work_channel"),
+                subject=state_value(state, "work_subject"),
+                vendor=state_value(state, "work_vendor"),
+                amount=state_value(state, "work_amount"),
+                payment_date=state_value(state, "work_payment_date"),
+                purpose=state_value(state, "work_purpose"),
+                evidence_folder_url=state_value(state, "work_evidence_folder"),
+            )
+            department = department_by_id(command.department_id)
+            if department is None:
+                raise ConfigurationError
+        except ValidationError as error:
+            field_blocks = {
+                "department_id": "work_department",
+                "assignee_slack_user_id": "settlement_assignee",
+                "channel_id": "work_channel",
+                "subject": "work_subject",
+                "vendor": "work_vendor",
+                "amount": "work_amount",
+                "payment_date": "work_payment_date",
+                "purpose": "work_purpose",
+                "evidence_folder_url": "work_evidence_folder",
+            }
+            errors = {}
+            for issue in error.errors():
+                field = str(issue["loc"][0])
+                errors[field_blocks.get(field, field)] = (
+                    t("https_required") if field == "evidence_folder_url" else t("validation_error")
+                )
+            await ack(response_action="errors", errors=errors)
+            return
+        except ConfigurationError:
+            await ack(
+                response_action="errors",
+                errors={"work_department": t("configuration_error")},
+            )
+            return
+        await ack()
+        try:
+            ledger = repository(client)
+            await ledger.assert_can_assign_settlement(actor)
+            request = await ledger.create_work_request(settlement_created_data(command, department))
+            request = await synchronize_work_request_message(client, request)
+        except ApprovalPermissionError:
+            await safe_dm(client, actor, t("unauthorized"))
+            return
+        except ConfigurationError:
+            await safe_dm(client, actor, t("channel_unavailable"))
+            return
+        except Exception:
+            logger.exception("Failed to create a settlement request")
+            await safe_dm(client, actor, t("submission_error"))
+            return
+        await safe_dm(
+            client, actor, t("settlement_request_sent", reference=request.reference_number)
+        )
+        await safe_dm(
+            client,
+            request.assignee_slack_user_id,
+            t("settlement_assignment_notice", reference=request.reference_number),
+            work_request_blocks(request),
+        )
+
+    @slack_app.action("start_assigned_settlement")
+    async def start_assigned_settlement(ack, body, client):
+        await ack()
+        actor = body["user"]["id"]
+        try:
+            request = await repository(client).get_work_request(body["actions"][0]["value"])
+            if actor != request.assignee_slack_user_id:
+                raise ApprovalPermissionError
+            if request.status != WorkRequestStatus.OPEN:
+                raise InvalidStateTransitionError
+        except (ApprovalPermissionError, EntityNotFoundError):
+            await safe_dm(client, actor, t("unauthorized"))
+            return
+        except InvalidStateTransitionError:
+            await safe_dm(client, actor, t("invalid_state"))
+            return
+        await open_new_request(
+            client,
+            body["trigger_id"],
+            actor,
+            initial_department_id=request.department_id,
+            source_work_request_id=request.id,
+        )
+
+    @slack_app.action("complete_work_request")
+    async def complete_work_request(ack, body, client):
+        await ack()
+        actor = body["user"]["id"]
+        try:
+            request = await repository(client).complete_work_request(
+                body["actions"][0]["value"], actor
+            )
+            await synchronize_work_request_message(client, request)
+        except ApprovalPermissionError:
+            await safe_dm(client, actor, t("unauthorized"))
+            return
+        except (EntityNotFoundError, InvalidStateTransitionError):
+            await safe_dm(client, actor, t("invalid_state"))
+            return
+        await safe_dm(
+            client, actor, t("work_request_completed", reference=request.reference_number)
+        )
+
     @slack_app.view("expense_context")
     async def submit_expense_context(ack, body, client):
         state = body["view"]["state"]
+        view_metadata = json.loads(body["view"].get("private_metadata") or "{}")
         applicant_type = state_value(state, "applicant_type")
         student_id = state_value(state, "student_id")
         if applicant_type == ApplicantType.STUDENT.value and not student_id:
@@ -379,10 +610,29 @@ def register_handlers(slack_app, settings: Settings) -> None:
         if category is None or budget is None or category.budget_program_id != budget.id:
             await ack(response_action="errors", errors={"category": t("configuration_error")})
             return
-        rule = await repository(client).get_rule(department_id, category_id)
+        ledger = repository(client)
+        rule = await ledger.get_rule(department_id, category_id)
         if not rule.is_complete:
             await ack(response_action="errors", errors={"category": t("configuration_error")})
             return
+        source_work_request = None
+        source_work_request_id = view_metadata.get("source_work_request_id")
+        if source_work_request_id:
+            try:
+                source_work_request = await ledger.get_work_request(source_work_request_id)
+                if (
+                    source_work_request.kind != WorkRequestKind.SETTLEMENT
+                    or source_work_request.status != WorkRequestStatus.OPEN
+                    or source_work_request.assignee_slack_user_id != body["user"]["id"]
+                    or source_work_request.department_id != department_id
+                ):
+                    raise ApprovalPermissionError
+            except (ApprovalPermissionError, EntityNotFoundError):
+                await ack(
+                    response_action="errors",
+                    errors={"category": t("invalid_state")},
+                )
+                return
         context = {
             "department_id": department_id,
             "applicant_type": applicant_type,
@@ -390,10 +640,17 @@ def register_handlers(slack_app, settings: Settings) -> None:
             "budget_program_id": budget_id,
             "category_id": category_id,
             "approval_rule": rule_as_context(rule),
+            **(
+                {"source_work_request_id": source_work_request_id} if source_work_request_id else {}
+            ),
         }
         await ack(
             response_action="update",
-            view=expense_details_modal(context, list(category.evidence_requirements)),
+            view=expense_details_modal(
+                context,
+                list(category.evidence_requirements),
+                source_work_request,
+            ),
         )
 
     @slack_app.view("expense_details")
@@ -452,6 +709,13 @@ def register_handlers(slack_app, settings: Settings) -> None:
                 confirmation += f"\n\n{t('non_drive_warning')}"
             await safe_dm(client, actor, confirmation)
             await notify_after_transition(client, request)
+            source_work_request_id = context.get("source_work_request_id")
+            if source_work_request_id:
+                try:
+                    work_request = await ledger.complete_work_request(source_work_request_id, actor)
+                    await synchronize_work_request_message(client, work_request)
+                except (ApprovalPermissionError, InvalidStateTransitionError, EntityNotFoundError):
+                    logger.exception("Expense submitted but assignment completion failed")
             await publish_home(client, actor)
         except Exception:
             logger.exception("Failed to create an expense ledger record")

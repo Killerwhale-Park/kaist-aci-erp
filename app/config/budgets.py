@@ -10,9 +10,8 @@ class BudgetSeed:
 
 
 BUDGET_SEEDS = [
-    BudgetSeed("student_support", "Student Support Budget", "학생 지원 예산", True),
-    BudgetSeed(
-        "ai_global_explorer", "AI Global Explorer Program", "AI 글로벌 탐방 프로그램", False
-    ),
-    BudgetSeed("resource_support", "Resource Support", "리소스 지원", False),
+    BudgetSeed("department_budget", "Department Budget", "학과예산", True),
+    BudgetSeed("academic_development", "Academic Development Fund", "학사계발비", False),
 ]
+
+LEGACY_BUDGET_IDS = {"student_support": "department_budget"}

@@ -12,6 +12,8 @@ def state_value(state: dict[str, Any], block_id: str, action_id: str = "value") 
         return element.get("selected_date")
     if element_type == "conversations_select":
         return element.get("selected_conversation")
+    if element_type == "users_select":
+        return element.get("selected_user")
     if element_type.endswith("select"):
         selected = element.get("selected_option")
         return selected.get("value") if selected else None

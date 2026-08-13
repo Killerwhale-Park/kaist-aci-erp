@@ -33,7 +33,7 @@ from app.expenses.schemas import (
 def make_rule(step_count: int, *, approvers: dict[int, tuple[str, ...]] | None = None):
     return ApprovalRule(
         department_id="department_1",
-        budget_program_id="student_support",
+        budget_program_id="department_budget",
         category_id="airfare",
         approval_channel_id="C_APPROVAL",
         steps=tuple(
@@ -60,7 +60,7 @@ def make_created(
         applicant_type="STUDENT",
         student_id="20260001",
         department_id="department_1",
-        budget_program_id="student_support",
+        budget_program_id="department_budget",
         category_id="airfare",
         amount=Decimal("120000"),
         vendor="Airline",
@@ -73,7 +73,7 @@ def make_created(
         command,
         make_rule(step_count, approvers=approvers),
         department=department_by_id("department_1"),
-        budget=budget_by_id("student_support"),
+        budget=budget_by_id("department_budget"),
         category=category_by_id("airfare"),
         request_id="REQ-1",
         reference_number="EXP-TEST-1",

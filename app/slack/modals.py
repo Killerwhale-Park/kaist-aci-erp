@@ -9,15 +9,16 @@ from app.domain.models import (
     EvidenceSubmission,
     ExpenseCategory,
     ExpenseRequest,
+    WorkRequest,
 )
-from app.i18n import t
+from app.i18n import display_name, t
 from app.slack.messages import request_message_blocks
 from app.slack.utils import input_element
 
 
 def _option(value: str, name_en: str, name_ko: str) -> dict:
     return {
-        "text": {"type": "plain_text", "text": f"{name_en} / {name_ko}"[:75]},
+        "text": {"type": "plain_text", "text": display_name(name_en, name_ko)[:75]},
         "value": value,
     }
 
@@ -27,10 +28,26 @@ def expense_context_modal(
     departments: Iterable[Department],
     budgets: Iterable[BudgetProgram],
     categories: Iterable[ExpenseCategory],
+    initial_department_id: str | None = None,
+    source_work_request_id: str | None = None,
 ) -> dict:
+    department_options = [_option(item.id, item.name_en, item.name_ko) for item in departments]
+    department_element: dict = {
+        "type": "static_select",
+        "action_id": "value",
+        "options": department_options,
+    }
+    initial_department = next(
+        (item for item in department_options if item["value"] == initial_department_id), None
+    )
+    if initial_department is not None:
+        department_element["initial_option"] = initial_department
     return {
         "type": "modal",
         "callback_id": "expense_context",
+        "private_metadata": json.dumps(
+            {"source_work_request_id": source_work_request_id} if source_work_request_id else {}
+        ),
         "title": {"type": "plain_text", "text": t("new_request_short")},
         "submit": {"type": "plain_text", "text": t("continue")},
         "close": {"type": "plain_text", "text": t("cancel")},
@@ -46,13 +63,7 @@ def expense_context_modal(
                 "type": "input",
                 "block_id": "department",
                 "label": {"type": "plain_text", "text": t("department")},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "value",
-                    "options": [
-                        _option(item.id, item.name_en, item.name_ko) for item in departments
-                    ],
-                },
+                "element": department_element,
             },
             {
                 "type": "input",
@@ -100,7 +111,169 @@ def expense_context_modal(
     }
 
 
-def expense_details_modal(context: dict, requirements: list[EvidenceRequirementDefinition]) -> dict:
+def _work_request_base_blocks(departments: Iterable[Department]) -> list[dict]:
+    return [
+        {
+            "type": "input",
+            "block_id": "work_department",
+            "label": {"type": "plain_text", "text": t("department")},
+            "element": {
+                "type": "static_select",
+                "action_id": "value",
+                "options": [_option(item.id, item.name_en, item.name_ko) for item in departments],
+            },
+        },
+        {
+            "type": "input",
+            "block_id": "work_channel",
+            "label": {"type": "plain_text", "text": t("request_channel")},
+            "element": {
+                "type": "conversations_select",
+                "action_id": "value",
+                "placeholder": {"type": "plain_text", "text": t("select_channel")},
+                "filter": {
+                    "include": ["private"],
+                    "exclude_external_shared_channels": True,
+                    "exclude_bot_users": True,
+                },
+            },
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": t("work_channel_notice")}],
+        },
+    ]
+
+
+def purchase_request_modal(departments: Iterable[Department]) -> dict:
+    blocks = _work_request_base_blocks(departments)
+    blocks[1:1] = [
+        {
+            "type": "input",
+            "block_id": "purchase_assignee",
+            "label": {"type": "plain_text", "text": t("purchase_assignee")},
+            "element": {
+                "type": "users_select",
+                "action_id": "value",
+                "placeholder": {"type": "plain_text", "text": t("select_person")},
+            },
+        }
+    ]
+    blocks.extend(
+        [
+            {
+                "type": "input",
+                "block_id": "item_name",
+                "label": {"type": "plain_text", "text": t("item_name")},
+                "element": input_element("value"),
+            },
+            {
+                "type": "input",
+                "block_id": "product_url",
+                "label": {"type": "plain_text", "text": t("product_url")},
+                "element": input_element("value", placeholder="https://..."),
+            },
+            {
+                "type": "input",
+                "block_id": "quantity",
+                "label": {"type": "plain_text", "text": t("quantity")},
+                "element": input_element("value", initial_value="1"),
+            },
+            {
+                "type": "input",
+                "block_id": "estimated_amount",
+                "optional": True,
+                "label": {"type": "plain_text", "text": t("estimated_amount")},
+                "element": input_element("value"),
+            },
+            {
+                "type": "input",
+                "block_id": "work_purpose",
+                "label": {"type": "plain_text", "text": t("purpose")},
+                "element": input_element("value", multiline=True),
+            },
+        ]
+    )
+    return {
+        "type": "modal",
+        "callback_id": "purchase_request_create",
+        "title": {"type": "plain_text", "text": t("purchase_title")},
+        "submit": {"type": "plain_text", "text": t("send_request")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": blocks,
+    }
+
+
+def settlement_request_modal(departments: Iterable[Department]) -> dict:
+    blocks = _work_request_base_blocks(departments)
+    blocks[1:1] = [
+        {
+            "type": "input",
+            "block_id": "settlement_assignee",
+            "label": {"type": "plain_text", "text": t("settlement_assignee")},
+            "element": {
+                "type": "users_select",
+                "action_id": "value",
+                "placeholder": {"type": "plain_text", "text": t("select_student")},
+            },
+        }
+    ]
+    blocks.extend(
+        [
+            {
+                "type": "input",
+                "block_id": "work_subject",
+                "label": {"type": "plain_text", "text": t("purchase_subject")},
+                "element": input_element("value"),
+            },
+            {
+                "type": "input",
+                "block_id": "work_vendor",
+                "label": {"type": "plain_text", "text": t("vendor")},
+                "element": input_element("value"),
+            },
+            {
+                "type": "input",
+                "block_id": "work_amount",
+                "label": {"type": "plain_text", "text": t("amount")},
+                "element": input_element("value"),
+            },
+            {
+                "type": "input",
+                "block_id": "work_payment_date",
+                "label": {"type": "plain_text", "text": t("payment_date")},
+                "element": {"type": "datepicker", "action_id": "value"},
+            },
+            {
+                "type": "input",
+                "block_id": "work_purpose",
+                "label": {"type": "plain_text", "text": t("purpose")},
+                "element": input_element("value", multiline=True),
+            },
+            {
+                "type": "input",
+                "block_id": "work_evidence_folder",
+                "optional": True,
+                "label": {"type": "plain_text", "text": t("evidence_folder")},
+                "element": input_element("value", placeholder=t("folder_placeholder")),
+            },
+        ]
+    )
+    return {
+        "type": "modal",
+        "callback_id": "settlement_request_create",
+        "title": {"type": "plain_text", "text": t("settlement_title")},
+        "submit": {"type": "plain_text", "text": t("send_request")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": blocks,
+    }
+
+
+def expense_details_modal(
+    context: dict,
+    requirements: list[EvidenceRequirementDefinition],
+    initial_request: WorkRequest | None = None,
+) -> dict:
     return {
         "type": "modal",
         "callback_id": "expense_details",
@@ -108,7 +281,8 @@ def expense_details_modal(context: dict, requirements: list[EvidenceRequirementD
         "title": {"type": "plain_text", "text": t("details_title")},
         "submit": {"type": "plain_text", "text": t("submit")},
         "close": {"type": "plain_text", "text": t("cancel")},
-        "blocks": _expense_fields() + _evidence_fields(requirements, EvidenceTiming.PRE),
+        "blocks": _expense_fields(initial_request)
+        + _evidence_fields(requirements, EvidenceTiming.PRE),
     }
 
 
@@ -369,9 +543,9 @@ def system_admins_modal(admin_slack_user_ids: list[str]) -> dict:
     }
 
 
-def _expense_fields(request: ExpenseRequest | None = None) -> list[dict]:
+def _expense_fields(request: ExpenseRequest | WorkRequest | None = None) -> list[dict]:
     initial_amount = None
-    if request is not None:
+    if request is not None and request.amount is not None:
         initial_amount = f"{request.amount:.2f}".rstrip("0").rstrip(".")
     blocks = [
         {
@@ -393,7 +567,11 @@ def _expense_fields(request: ExpenseRequest | None = None) -> list[dict]:
             "element": {
                 "type": "datepicker",
                 "action_id": "value",
-                **({"initial_date": request.payment_date.isoformat()} if request else {}),
+                **(
+                    {"initial_date": request.payment_date.isoformat()}
+                    if request and request.payment_date
+                    else {}
+                ),
             },
         },
         {

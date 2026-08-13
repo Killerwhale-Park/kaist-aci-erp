@@ -1,10 +1,11 @@
 # AIC Expense Approval
 
-4개 학과가 공동으로 사용하는 Slack 기반 사전 정산·승인 앱입니다.
+AI Computing, AI System, AX, AI Future가 공동으로 사용하는 Slack 기반 사전 정산·승인 앱입니다.
 
 - 사용자 화면: Slack App Home, Modal, DM
 - 증빙: Google Drive URL
 - 승인 및 상태 저장: 관리자가 지정한 비공개 채널의 메시지와 스레드
+- 업무 요청: 학생의 구매 요청, 교수·행정 담당자의 학생 정산 요청
 - 실행 환경: FastAPI on Vercel
 
 별도 웹 화면과 데이터베이스는 사용하지 않습니다. 승인 단계는 설정에 따라 N단계로 동작합니다. 내부 구조는 [설계 문서](docs/design.md)에 정리되어 있습니다.
@@ -65,6 +66,16 @@ https://kaist-aci-erp.vercel.app/slack/events
 ```
 
 이후 App Home의 `Manage Approval Rules`에서 학과·카테고리별 승인 채널, 승인 단계와 승인자를 설정합니다.
+
+## Slack 사용
+
+App Home에서 다음 작업을 시작합니다.
+
+- `Purchase Request / 구매 요청`: 구매 담당자와 게시할 비공개 채널을 선택합니다.
+- `Assign Settlement / 정산 요청 보내기`: 승인자 또는 시스템 관리자만 사용할 수 있으며, 정산할 학생과 게시 채널을 선택합니다. 학생이 요청 카드에서 정산 작성을 누르면 전달된 구매 정보가 정산 폼에 채워집니다.
+- `New Expense Request / 새 정산 신청`: `학과예산 / Department Budget` 정산을 제출합니다.
+
+구매 요청과 정산 요청은 같은 채널 또는 서로 다른 채널로 보낼 수 있습니다. 선택 가능한 채널에는 봇이 미리 참여하고 있어야 합니다. `학사계발비 / Academic Development Fund`는 증빙·승인 규칙이 확정될 때까지 준비 중으로 표시됩니다.
 
 ## 개발 및 검사
 

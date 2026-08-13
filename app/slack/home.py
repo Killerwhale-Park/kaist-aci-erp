@@ -1,6 +1,6 @@
 from app.domain.enums import EvidenceSubmissionStatus, EvidenceTiming, RequestStatus, UserRole
 from app.domain.models import BudgetProgram, ExpenseRequest, UserProfile
-from app.i18n import t
+from app.i18n import display_name, t
 from app.slack.messages import status_text
 from app.slack.utils import escape_mrkdwn
 
@@ -10,6 +10,7 @@ def app_home_view(
     budgets: list[BudgetProgram],
     own_requests: list[ExpenseRequest],
     pending_approvals: list[ExpenseRequest],
+    can_assign_settlement: bool = False,
 ) -> dict:
     blocks: list[dict] = [
         {"type": "header", "text": {"type": "plain_text", "text": t("app_title")}},
@@ -26,10 +27,38 @@ def app_home_view(
             ],
         },
         {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{t('work_requests')}*"}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "new_purchase_work_request",
+                    "text": {"type": "plain_text", "text": t("new_purchase_request")},
+                    "value": "purchase",
+                },
+                *(
+                    [
+                        {
+                            "type": "button",
+                            "action_id": "new_settlement_work_request",
+                            "text": {
+                                "type": "plain_text",
+                                "text": t("new_settlement_request"),
+                            },
+                            "value": "settlement",
+                        }
+                    ]
+                    if can_assign_settlement
+                    else []
+                ),
+            ],
+        },
+        {"type": "divider"},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*{t('available_programs')}*"}},
     ]
     for budget in budgets:
-        text = f"*{escape_mrkdwn(budget.name_en)} / {escape_mrkdwn(budget.name_ko)}*"
+        text = f"*{display_name(escape_mrkdwn(budget.name_en), escape_mrkdwn(budget.name_ko))}*"
         if budget.is_available:
             blocks.append(
                 {
@@ -60,8 +89,8 @@ def app_home_view(
     if not own_requests:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": t("no_requests")}})
     for request in own_requests:
-        category_name = (
-            f"{escape_mrkdwn(request.category.name_en)} / {escape_mrkdwn(request.category.name_ko)}"
+        category_name = display_name(
+            escape_mrkdwn(request.category.name_en), escape_mrkdwn(request.category.name_ko)
         )
         actions = [
             {

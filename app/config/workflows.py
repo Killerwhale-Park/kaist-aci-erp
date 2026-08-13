@@ -51,9 +51,9 @@ def workflow_rule_seeds() -> list[WorkflowRuleSeed]:
             rules.append(
                 WorkflowRuleSeed(
                     workflow_id=workflow_id,
-                    rule_id=f"rule_{department_id}_student_support_{category_id}",
+                    rule_id=f"rule_{department_id}_department_budget_{category_id}",
                     department_id=department_id,
-                    budget_program_id="student_support",
+                    budget_program_id="department_budget",
                     category_id=category_id,
                     name_en=f"{department_id} {category_id} sample workflow",
                     name_ko=f"{department_id} {category_id} 샘플 승인 절차",

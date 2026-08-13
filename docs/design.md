@@ -24,12 +24,15 @@ Slack Modal / App Home / Buttons / DM
 
 봇은 `conversations.list`로 자신이 참여한 비공개 채널을 찾고 각 채널의 메시지 metadata를 조회합니다. 따라서 채널 ID를 환경변수에 넣지 않습니다.
 
-채널에는 두 종류의 root message가 저장됩니다.
+채널에는 세 종류의 root message가 저장됩니다.
 
 - `expense_record`: 신청 한 건의 현재 상태와 승인 버튼
+- `work_request_record`: 구매 요청 또는 학생 정산 요청의 현재 상태와 완료 버튼
 - `configuration_record`: 승인 규칙 또는 관리자 설정
 
 신청 메시지의 thread에는 `expense_event_chunk`, 설정 메시지의 thread에는 `configuration_chunk`가 append-only로 추가됩니다. 큰 payload는 zlib 압축 후 여러 metadata message로 나눕니다. 모든 chunk가 있는 event만 유효합니다.
+
+구매 요청과 정산 요청은 생성할 때 게시 채널을 선택합니다. 같은 채널을 공유해도 되고 별도 채널로 분리해도 됩니다. 생성과 완료 이력은 `work_request_event_chunk`로 해당 메시지 thread에 저장합니다. 정산 요청 생성은 현재 승인 규칙의 승인자와 시스템 관리자에게만 허용합니다.
 
 ## Expense events
 

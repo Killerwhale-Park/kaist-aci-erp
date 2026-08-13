@@ -40,3 +40,13 @@ class RequestStatus(StrEnum):
     REJECTED = "REJECTED"
     APPROVED_PENDING_POST_EVIDENCE = "APPROVED_PENDING_POST_EVIDENCE"
     COMPLETED = "COMPLETED"
+
+
+class WorkRequestKind(StrEnum):
+    PURCHASE = "PURCHASE"
+    SETTLEMENT = "SETTLEMENT"
+
+
+class WorkRequestStatus(StrEnum):
+    OPEN = "OPEN"
+    COMPLETED = "COMPLETED"

@@ -3,9 +3,18 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from app.config.budgets import LEGACY_BUDGET_IDS
 from app.config.settings import Settings
 from app.domain.catalog import default_rule
-from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest
+from app.domain.enums import WorkRequestStatus
+from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest, WorkRequest
+from app.domain.work_requests import (
+    WORK_REQUEST_COMPLETED,
+    WORK_REQUEST_CREATED,
+    replay_work_events,
+    work_request_from_created,
+    work_request_summary,
+)
 from app.domain.workflow import (
     REQUEST_CREATED,
     replay_events,
@@ -13,11 +22,18 @@ from app.domain.workflow import (
     request_summary,
     validate_transition,
 )
-from app.exceptions import ApprovalPermissionError, ConfigurationError, EntityNotFoundError
+from app.exceptions import (
+    ApprovalPermissionError,
+    ConfigurationError,
+    EntityNotFoundError,
+    InvalidStateTransitionError,
+)
 from app.ledger.codec import decode_chunks, encode_chunks, event_record
 
 EXPENSE_ROOT = "expense_record"
 EXPENSE_EVENT_CHUNK = "expense_event_chunk"
+WORK_REQUEST_ROOT = "work_request_record"
+WORK_REQUEST_EVENT_CHUNK = "work_request_event_chunk"
 CONFIG_ROOT = "configuration_record"
 CONFIG_CHUNK = "configuration_chunk"
 RULE_SAVED = "RULE_SAVED"
@@ -112,12 +128,22 @@ class SlackLedgerRepository:
     async def _expense_roots(self) -> list[dict]:
         return await self._roots(EXPENSE_ROOT)
 
+    async def _work_request_roots(self) -> list[dict]:
+        return await self._roots(WORK_REQUEST_ROOT)
+
     async def _find_expense_root(self, request_id: str) -> dict:
         for message in await self._expense_roots():
             _, summary = self._metadata(message)
             if summary.get("request_id") == request_id:
                 return message
         raise EntityNotFoundError(f"Expense request not found: {request_id}")
+
+    async def _find_work_request_root(self, request_id: str) -> dict:
+        for message in await self._work_request_roots():
+            _, summary = self._metadata(message)
+            if summary.get("work_request_id") == request_id:
+                return message
+        raise EntityNotFoundError(f"Work request not found: {request_id}")
 
     async def _append_chunks(
         self,
@@ -164,6 +190,39 @@ class SlackLedgerRepository:
             created_data,
         )
         return await self._load_from_root({"ts": root_ts, CHANNEL_ID: channel_id})
+
+    async def channel_is_available(self, channel_id: str) -> bool:
+        return channel_id in await self._channel_ids()
+
+    async def create_work_request(self, created_data: dict[str, Any]) -> WorkRequest:
+        provisional = work_request_from_created(created_data)
+        channel_id = provisional.channel_id
+        if not await self.channel_is_available(channel_id):
+            raise ConfigurationError("The app is not a member of the selected channel")
+
+        response = await self.client.chat_postMessage(
+            channel=channel_id,
+            text=f"Work request {provisional.reference_number}",
+            metadata={
+                "event_type": WORK_REQUEST_ROOT,
+                "event_payload": work_request_summary(provisional),
+            },
+            unfurl_links=False,
+            unfurl_media=False,
+        )
+        self._invalidate_history(channel_id)
+        root_ts = response["ts"]
+        await self._append_chunks(
+            channel_id=channel_id,
+            root_ts=root_ts,
+            metadata_event_type=WORK_REQUEST_EVENT_CHUNK,
+            record_type="work_request_event",
+            data=event_record(
+                WORK_REQUEST_CREATED, provisional.requester_slack_user_id, created_data
+            ),
+            audit_text=f"{WORK_REQUEST_CREATED} by <@{provisional.requester_slack_user_id}>",
+        )
+        return await self._load_work_request_from_root({"ts": root_ts, CHANNEL_ID: channel_id})
 
     async def _append_event_to_root(
         self,
@@ -220,8 +279,73 @@ class SlackLedgerRepository:
         ]
         return replay_events(events, message_ts=root["ts"])
 
+    async def _load_work_request_from_root(self, root: dict) -> WorkRequest:
+        records = decode_chunks(
+            await self._thread(root[CHANNEL_ID], root["ts"]),
+            event_type=WORK_REQUEST_EVENT_CHUNK,
+        )
+        events = [
+            {"ts": record["ts"], **record["data"]}
+            for record in records
+            if record["record_type"] == "work_request_event"
+        ]
+        return replay_work_events(events, message_ts=root["ts"])
+
     async def get_request(self, request_id: str) -> ExpenseRequest:
         return await self._load_from_root(await self._find_expense_root(request_id))
+
+    async def get_work_request(self, request_id: str) -> WorkRequest:
+        return await self._load_work_request_from_root(
+            await self._find_work_request_root(request_id)
+        )
+
+    async def complete_work_request(self, request_id: str, actor: str) -> WorkRequest:
+        root = await self._find_work_request_root(request_id)
+        current = await self._load_work_request_from_root(root)
+        allowed = {
+            current.requester_slack_user_id,
+            current.assignee_slack_user_id,
+            *(await self.system_admin_ids()),
+        }
+        if actor not in allowed:
+            raise ApprovalPermissionError("Only a participant can complete this work request")
+        if current.status != WorkRequestStatus.OPEN:
+            raise InvalidStateTransitionError("Work request is already completed")
+        await self._append_chunks(
+            channel_id=root[CHANNEL_ID],
+            root_ts=root["ts"],
+            metadata_event_type=WORK_REQUEST_EVENT_CHUNK,
+            record_type="work_request_event",
+            data=event_record(WORK_REQUEST_COMPLETED, actor, {}),
+            audit_text=f"{WORK_REQUEST_COMPLETED} by <@{actor}>",
+        )
+        updated = await self._load_work_request_from_root(root)
+        await self.client.chat_update(
+            channel=updated.channel_id,
+            ts=updated.message_ts,
+            text=root.get("text") or f"Work request {updated.reference_number}",
+            metadata={
+                "event_type": WORK_REQUEST_ROOT,
+                "event_payload": work_request_summary(updated),
+            },
+        )
+        self._invalidate_history(updated.channel_id)
+        return updated
+
+    async def update_work_request_view(
+        self, request: WorkRequest, *, text: str, blocks: list[dict]
+    ) -> None:
+        await self.client.chat_update(
+            channel=request.channel_id,
+            ts=request.message_ts,
+            text=text,
+            blocks=blocks,
+            metadata={
+                "event_type": WORK_REQUEST_ROOT,
+                "event_payload": work_request_summary(request),
+            },
+        )
+        self._invalidate_history(request.channel_id)
 
     async def list_for_applicant(self, slack_user_id: str) -> list[ExpenseRequest]:
         matches = []
@@ -283,7 +407,9 @@ class SlackLedgerRepository:
                 continue
             return ApprovalRule(
                 department_id=data["department_id"],
-                budget_program_id=data["budget_program_id"],
+                budget_program_id=LEGACY_BUDGET_IDS.get(
+                    data["budget_program_id"], data["budget_program_id"]
+                ),
                 category_id=data["category_id"],
                 approval_channel_id=data["approval_channel_id"],
                 steps=tuple(
@@ -313,7 +439,7 @@ class SlackLedgerRepository:
         previous = await self.get_rule(rule.department_id, rule.category_id)
         stored = ApprovalRule(
             department_id=rule.department_id,
-            budget_program_id=rule.budget_program_id,
+            budget_program_id=LEGACY_BUDGET_IDS.get(rule.budget_program_id, rule.budget_program_id),
             category_id=rule.category_id,
             approval_channel_id=rule.approval_channel_id,
             steps=rule.steps,
@@ -373,6 +499,29 @@ class SlackLedgerRepository:
     async def assert_system_admin(self, actor: str) -> None:
         if actor not in await self.system_admin_ids():
             raise ApprovalPermissionError("System administrator role required")
+
+    async def settlement_assigner_ids(self) -> set[str]:
+        allowed = set(await self.system_admin_ids())
+        seen: set[str] = set()
+        for root in await self._roots(CONFIG_ROOT):
+            _, payload = self._metadata(root)
+            if payload.get("configuration_type") != "approval_rule":
+                continue
+            key = str(payload.get("key") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            try:
+                data = await self._configuration_data(root, RULE_SAVED)
+            except ConfigurationError:
+                continue
+            for step in data.get("steps", []):
+                allowed.update(step.get("approver_slack_user_ids", []))
+        return allowed
+
+    async def assert_can_assign_settlement(self, actor: str) -> None:
+        if actor not in await self.settlement_assigner_ids():
+            raise ApprovalPermissionError("Approval or administrator role required")
 
     async def _write_admin_record(
         self, channel_id: str, actor: str, slack_user_ids: set[str]

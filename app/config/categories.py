@@ -21,7 +21,7 @@ class CategorySeed:
     name_en: str
     name_ko: str
     evidence: tuple[EvidenceSeed, ...]
-    budget_program_id: str = "student_support"
+    budget_program_id: str = "department_budget"
 
 
 CATEGORY_SEEDS = [

@@ -1,6 +1,6 @@
 display_information:
   name: Student Expense Support ERP
-  description: Student expense pre-settlement and approval
+  description: Expense approval, purchase requests, and settlement assignments
   background_color: "#2f4f4f"
 features:
   app_home:

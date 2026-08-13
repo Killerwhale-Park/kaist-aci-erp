@@ -12,6 +12,8 @@ from app.domain.enums import (
     EvidenceTiming,
     RequestStatus,
     UserRole,
+    WorkRequestKind,
+    WorkRequestStatus,
 )
 
 
@@ -151,3 +153,28 @@ class ExpenseRequest:
 class UserProfile:
     slack_user_id: str
     role: UserRole
+
+
+@dataclass
+class WorkRequest:
+    id: str
+    reference_number: str
+    kind: WorkRequestKind
+    requester_slack_user_id: str
+    assignee_slack_user_id: str
+    department_id: str
+    channel_id: str
+    subject: str
+    purpose: str
+    department: Department
+    created_at: datetime
+    quantity: int | None = None
+    amount: Decimal | None = None
+    vendor: str | None = None
+    payment_date: date | None = None
+    source_url: str | None = None
+    evidence_folder_url: str | None = None
+    status: WorkRequestStatus = WorkRequestStatus.OPEN
+    completed_by_slack_user_id: str | None = None
+    completed_at: datetime | None = None
+    message_ts: str | None = None

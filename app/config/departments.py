@@ -10,10 +10,8 @@ class DepartmentSeed:
 
 def department_seeds() -> list[DepartmentSeed]:
     return [
-        DepartmentSeed(
-            id=f"department_{index}",
-            name_en=f"Department {index}",
-            name_ko=f"학과 {index}",
-        )
-        for index in range(1, 5)
+        DepartmentSeed("department_1", "AI Computing", "AI Computing"),
+        DepartmentSeed("department_2", "AI System", "AI System"),
+        DepartmentSeed("department_3", "AX", "AX"),
+        DepartmentSeed("department_4", "AI Future", "AI Future"),
     ]

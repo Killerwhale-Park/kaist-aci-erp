@@ -2,6 +2,52 @@ STRINGS = {
     "app_title": "Expense Support / 연구비 정산",
     "new_request": "New Expense Request / 새 정산 신청",
     "new_request_short": "New Expense / 새 신청",
+    "work_requests": "Work Requests / 업무 요청",
+    "new_purchase_request": "Purchase Request / 구매 요청",
+    "new_settlement_request": "Assign Settlement / 정산 요청 보내기",
+    "purchase_title": "Purchase / 구매 요청",
+    "settlement_title": "Settlement / 정산 요청",
+    "send_request": "Send / 보내기",
+    "request_channel": "Request Channel / 요청 채널",
+    "select_channel": "Select a private channel",
+    "work_channel_notice": (
+        "The app must already be a member of the selected private channel. "
+        "구매 요청과 정산 요청은 같은 채널 또는 서로 다른 채널로 보낼 수 있습니다."
+    ),
+    "purchase_assignee": "Buyer / 구매 담당 교수",
+    "settlement_assignee": "Student / 정산 담당 학생",
+    "select_person": "Select a person",
+    "select_student": "Select a student",
+    "item_name": "Item / 물품명",
+    "product_url": "Product URL / 구매 URL",
+    "quantity": "Quantity / 수량",
+    "estimated_amount": "Estimated Amount / 예상 금액",
+    "purchase_subject": "Purchase / 구매 건",
+    "requester": "Requester / 요청자",
+    "assignee": "Assignee / 담당자",
+    "mark_completed": "Mark Complete / 완료 처리",
+    "start_settlement": "Start Expense / 정산 작성",
+    "work_status_open": "Open / 처리 대기",
+    "work_status_completed": "Completed / 완료",
+    "purchase_request_sent": (
+        "Purchase request {reference} was sent.\n구매 요청 {reference}을 보냈습니다."
+    ),
+    "settlement_request_sent": (
+        "Settlement request {reference} was sent.\n정산 요청 {reference}을 보냈습니다."
+    ),
+    "purchase_assignment_notice": (
+        "You received purchase request {reference}.\n구매 요청 {reference}이 도착했습니다."
+    ),
+    "settlement_assignment_notice": (
+        "You received settlement request {reference}.\n정산 요청 {reference}이 도착했습니다."
+    ),
+    "work_request_completed": (
+        "Work request {reference} was completed.\n업무 요청 {reference}을 완료했습니다."
+    ),
+    "channel_unavailable": (
+        "The app is not a member of this private channel.\n"
+        "앱이 참여 중인 비공개 채널을 선택해주세요."
+    ),
     "submit": "Submit / 제출",
     "continue": "Continue / 계속",
     "cancel": "Cancel / 취소",
