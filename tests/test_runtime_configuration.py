@@ -47,3 +47,25 @@ async def test_bootstrap_admin_is_used_only_until_runtime_record_exists(
     assert await ledger.system_admin_ids() == {"U_ADMIN"}
     await ledger.replace_system_admins("U_ADMIN", ["U_RUNTIME"])
     assert await ledger.system_admin_ids() == {"U_RUNTIME"}
+
+
+@pytest.mark.asyncio
+async def test_new_rule_can_be_created_without_a_seed(
+    slack_client, settings: Settings, monkeypatch
+) -> None:
+    monkeypatch.setattr("app.ledger.repository.default_rule", lambda *_: None)
+    ledger = SlackLedgerRepository(slack_client, settings)
+
+    saved = await ledger.save_rule(
+        "U_ADMIN",
+        ApprovalRule(
+            department_id="department_1",
+            budget_program_id="student_union",
+            category_id="union_airfare",
+            approval_channel_id="C_APPROVAL",
+            steps=(ApprovalRuleStep("Approval", "승인", ("U_APPROVER",)),),
+        ),
+    )
+
+    assert saved.version == 1
+    assert await ledger.get_rule("department_1", "union_airfare") == saved

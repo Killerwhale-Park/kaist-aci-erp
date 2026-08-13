@@ -66,6 +66,8 @@ from app.slack.modals import (
     approval_decision_modal,
     approval_rule_editor_modal,
     approval_rule_selector_modal,
+    configuration_loading_modal,
+    configuration_notice_modal,
     edit_expense_modal,
     expense_context_modal,
     expense_details_modal,
@@ -146,13 +148,53 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except SlackApiError:
             logger.exception("Failed to send Slack DM to %s", slack_user_id)
 
-    async def safe_open_modal(client, trigger_id: str, view: dict, slack_user_id: str) -> bool:
+    async def modal_failure_dm(client, slack_user_id: str, error_code: str) -> None:
+        message_key = (
+            "form_open_expired"
+            if error_code
+            in {
+                "exchanged_trigger_id",
+                "expired_trigger_id",
+                "invalid_trigger",
+                "invalid_trigger_id",
+                "trigger_exchanged",
+                "trigger_expired",
+            }
+            else "form_open_error"
+        )
+        await safe_dm(client, slack_user_id, f"{t(message_key)}\n`{error_code}`")
+
+    async def safe_open_modal(client, trigger_id: str, view: dict, slack_user_id: str):
         try:
-            await client.views_open(trigger_id=trigger_id, view=view)
+            return await client.views_open(trigger_id=trigger_id, view=view)
+        except SlackApiError as exc:
+            error_code = str(exc.response.get("error") or "unknown_error")
+            logger.exception("Slack rejected modal %s: %s", view.get("callback_id"), error_code)
+            await modal_failure_dm(client, slack_user_id, error_code)
+            return None
+
+    async def safe_push_modal(client, trigger_id: str, view: dict, slack_user_id: str):
+        try:
+            return await client.views_push(trigger_id=trigger_id, view=view)
+        except SlackApiError as exc:
+            error_code = str(exc.response.get("error") or "unknown_error")
+            logger.exception(
+                "Slack rejected pushed modal %s: %s", view.get("callback_id"), error_code
+            )
+            await modal_failure_dm(client, slack_user_id, error_code)
+            return None
+
+    async def safe_update_modal(client, view_id: str, view: dict, slack_user_id: str) -> bool:
+        try:
+            await client.views_update(view_id=view_id, view=view)
             return True
-        except SlackApiError:
-            logger.exception("Slack rejected modal %s", view.get("callback_id"))
-            await safe_dm(client, slack_user_id, t("form_open_error"))
+        except SlackApiError as exc:
+            error_code = str(exc.response.get("error") or "unknown_error")
+            logger.exception(
+                "Slack rejected modal update %s: %s", view.get("callback_id"), error_code
+            )
+            if error_code not in {"view_not_found", "not_found"}:
+                await safe_dm(client, slack_user_id, t("configuration_load_error"))
             return False
 
     async def send_ephemeral(client, body: dict, text: str, respond=None) -> None:
@@ -1010,26 +1052,60 @@ def register_handlers(slack_app, settings: Settings) -> None:
     async def manage_rules_action(ack, body, client):
         await ack()
         actor = body["user"]["id"]
+        opened = await safe_open_modal(client, body["trigger_id"], administration_modal(), actor)
+        if opened is None:
+            return
         try:
             await repository(client).assert_system_admin(actor)
         except ApprovalPermissionError:
-            await safe_dm(client, actor, t("unauthorized"))
+            await safe_update_modal(
+                client,
+                opened["view"]["id"],
+                configuration_notice_modal(t("unauthorized")),
+                actor,
+            )
             return
-        await safe_open_modal(client, body["trigger_id"], administration_modal(), actor)
+        except (ConfigurationError, SlackApiError):
+            logger.exception("Failed to verify system administrator %s", actor)
+            await safe_update_modal(
+                client,
+                opened["view"]["id"],
+                configuration_notice_modal(t("configuration_load_error")),
+                actor,
+            )
+            return
 
     @slack_app.action("configure_approval_rules")
     async def configure_approval_rules_action(ack, body, client):
         await ack()
         actor = body["user"]["id"]
+        pushed = await safe_push_modal(
+            client,
+            body["trigger_id"],
+            approval_rule_selector_modal(departments(), categories()),
+            actor,
+        )
+        if pushed is None:
+            return
         try:
             await repository(client).assert_system_admin(actor)
         except ApprovalPermissionError:
-            await safe_dm(client, actor, t("unauthorized"))
+            await safe_update_modal(
+                client,
+                pushed["view"]["id"],
+                configuration_notice_modal(t("unauthorized")),
+                actor,
+            )
             return
-        await client.views_push(
-            trigger_id=body["trigger_id"],
-            view=approval_rule_selector_modal(departments(), categories()),
-        )
+        except (ConfigurationError, SlackApiError):
+            logger.exception("Failed to verify system administrator %s", actor)
+            await safe_update_modal(
+                client,
+                pushed["view"]["id"],
+                configuration_notice_modal(t("configuration_load_error")),
+                actor,
+            )
+            return
 
     @slack_app.view("approval_rule_selector")
     async def submit_approval_rule_selector(ack, body, client):
@@ -1037,26 +1113,60 @@ def register_handlers(slack_app, settings: Settings) -> None:
         state = body["view"]["state"]
         department_id = state_value(state, "rule_department")
         category_id = state_value(state, "rule_category")
+        if not department_id or not category_id:
+            await ack(response_action="errors", errors={"rule_category": t("validation_error")})
+            return
+        await ack(response_action="update", view=configuration_loading_modal())
+        view_id = body["view"]["id"]
         try:
             ledger = repository(client)
             await ledger.assert_system_admin(actor)
             rule = await ledger.get_rule(department_id, category_id)
-            view = approval_rule_editor_modal(
+        except ApprovalPermissionError:
+            await safe_update_modal(
+                client, view_id, configuration_notice_modal(t("unauthorized")), actor
+            )
+            return
+        except EntityNotFoundError:
+            rule = None
+        except (ConfigurationError, SlackApiError):
+            logger.exception("Failed to load approval rule %s:%s", department_id, category_id)
+            await safe_update_modal(
+                client,
+                view_id,
+                configuration_notice_modal(t("configuration_load_error")),
+                actor,
+            )
+            return
+
+        await safe_update_modal(
+            client,
+            view_id,
+            approval_rule_editor_modal(
                 department_id,
                 category_id,
-                rule.approval_channel_id,
-                [
-                    {
-                        "name_en": step.name_en,
-                        "name_ko": step.name_ko,
-                        "approver_slack_user_ids": list(step.approver_slack_user_ids),
-                    }
-                    for step in rule.steps
-                ],
-            )
-            await ack(response_action="update", view=view)
-        except (ApprovalPermissionError, EntityNotFoundError):
-            await ack(response_action="errors", errors={"rule_category": t("configuration_error")})
+                rule.approval_channel_id if rule else None,
+                (
+                    [
+                        {
+                            "name_en": step.name_en,
+                            "name_ko": step.name_ko,
+                            "approver_slack_user_ids": list(step.approver_slack_user_ids),
+                        }
+                        for step in rule.steps
+                    ]
+                    if rule
+                    else [
+                        {
+                            "name_en": "Approval Step 1",
+                            "name_ko": "승인 단계 1",
+                            "approver_slack_user_ids": [],
+                        }
+                    ]
+                ),
+            ),
+            actor,
+        )
 
     async def update_approval_step_editor(ack, body, client, operation: str) -> None:
         await ack()
@@ -1150,15 +1260,37 @@ def register_handlers(slack_app, settings: Settings) -> None:
     async def configure_system_admins_action(ack, body, client):
         await ack()
         actor = body["user"]["id"]
+        pushed = await safe_push_modal(
+            client, body["trigger_id"], configuration_loading_modal(), actor
+        )
+        if pushed is None:
+            return
         try:
             ledger = repository(client)
             await ledger.assert_system_admin(actor)
             admins = await ledger.system_admin_ids()
         except ApprovalPermissionError:
-            await safe_dm(client, actor, t("unauthorized"))
+            await safe_update_modal(
+                client,
+                pushed["view"]["id"],
+                configuration_notice_modal(t("unauthorized")),
+                actor,
+            )
             return
-        await client.views_push(
-            trigger_id=body["trigger_id"], view=system_admins_modal(sorted(admins))
+        except (ConfigurationError, SlackApiError):
+            logger.exception("Failed to load system administrator configuration")
+            await safe_update_modal(
+                client,
+                pushed["view"]["id"],
+                configuration_notice_modal(t("configuration_load_error")),
+                actor,
+            )
+            return
+        await safe_update_modal(
+            client,
+            pushed["view"]["id"],
+            system_admins_modal(sorted(admins)),
+            actor,
         )
 
     @slack_app.view("system_admins_editor")
@@ -1167,15 +1299,15 @@ def register_handlers(slack_app, settings: Settings) -> None:
         if not selected:
             await ack(response_action="errors", errors={"system_admins": t("admin_required")})
             return
+        await ack()
         actor = body["user"]["id"]
         try:
             await repository(client).replace_system_admins(actor, selected)
-            await ack()
         except ApprovalPermissionError:
-            await ack(response_action="errors", errors={"system_admins": t("unauthorized")})
+            await safe_dm(client, actor, t("unauthorized"))
             return
         except ConfigurationError:
-            await ack(response_action="errors", errors={"system_admins": t("configuration_error")})
+            await safe_dm(client, actor, t("configuration_error"))
             return
         await safe_dm(client, actor, t("admins_saved"))
         await publish_home(client, actor)

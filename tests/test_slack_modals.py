@@ -6,6 +6,8 @@ from app.domain.models import (
 )
 from app.slack.modals import (
     approval_rule_editor_modal,
+    configuration_loading_modal,
+    configuration_notice_modal,
     expense_context_modal,
     expense_details_modal,
     system_admins_modal,
@@ -196,3 +198,12 @@ def test_every_modal_with_input_blocks_has_a_submit_button() -> None:
     for view in views:
         if any(block.get("type") == "input" for block in view["blocks"]):
             assert view.get("submit"), view["callback_id"]
+
+
+def test_configuration_progress_views_do_not_require_input() -> None:
+    loading = configuration_loading_modal()
+    notice = configuration_notice_modal("Unable to load / 불러오기 실패")
+
+    assert loading["callback_id"] == "configuration_loading"
+    assert notice["callback_id"] == "configuration_notice"
+    assert all(block["type"] != "input" for block in loading["blocks"] + notice["blocks"])

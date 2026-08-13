@@ -436,14 +436,17 @@ class SlackLedgerRepository:
             raise ConfigurationError("The app is not a member of the approval channel")
 
         admins = await self.system_admin_ids()
-        previous = await self.get_rule(rule.department_id, rule.category_id)
+        try:
+            previous = await self.get_rule(rule.department_id, rule.category_id)
+        except EntityNotFoundError:
+            previous = None
         stored = ApprovalRule(
             department_id=rule.department_id,
             budget_program_id=LEGACY_BUDGET_IDS.get(rule.budget_program_id, rule.budget_program_id),
             category_id=rule.category_id,
             approval_channel_id=rule.approval_channel_id,
             steps=rule.steps,
-            version=previous.version + 1,
+            version=(previous.version if previous else 0) + 1,
         )
         data = {
             "department_id": stored.department_id,

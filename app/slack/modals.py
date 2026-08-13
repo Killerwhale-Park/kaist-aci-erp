@@ -446,6 +446,36 @@ def administration_modal() -> dict:
     }
 
 
+def configuration_loading_modal() -> dict:
+    return {
+        "type": "modal",
+        "callback_id": "configuration_loading",
+        "title": {"type": "plain_text", "text": t("administration_title")},
+        "close": {"type": "plain_text", "text": t("close")},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": t("configuration_loading")},
+            }
+        ],
+    }
+
+
+def configuration_notice_modal(message: str) -> dict:
+    return {
+        "type": "modal",
+        "callback_id": "configuration_notice",
+        "title": {"type": "plain_text", "text": t("administration_title")},
+        "close": {"type": "plain_text", "text": t("close")},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": message},
+            }
+        ],
+    }
+
+
 def approval_rule_selector_modal(
     departments: Iterable[Department], categories: Iterable[ExpenseCategory]
 ) -> dict:

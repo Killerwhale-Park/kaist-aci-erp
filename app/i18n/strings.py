@@ -194,6 +194,15 @@ STRINGS = {
         "Slack could not open the form. Please try again.\n"
         "Slack이 양식을 열지 못했습니다. 다시 시도해주세요."
     ),
+    "form_open_expired": (
+        "The Slack interaction expired while the form was loading. Please try again.\n"
+        "양식을 불러오는 동안 Slack 상호작이 만료되었습니다. 다시 시도해주세요."
+    ),
+    "configuration_loading": ("Loading the current configuration…\n현재 설정을 불러오는 중입니다…"),
+    "configuration_load_error": (
+        "The configuration could not be loaded. Please close this window and try again.\n"
+        "설정을 불러오지 못했습니다. 창을 닫고 다시 시도해주세요."
+    ),
     "details_title": "Expense Details / 상세",
     "post_title": "Post Evidence / 사후 증빙",
     "request_details": "Request Details / 신청 상세",
