@@ -48,8 +48,8 @@ BOOTSTRAP_SYSTEM_ADMIN_SLACK_USER_IDS=U...
 4. 배포 후 다음 주소를 확인합니다.
 
 ```text
-https://YOUR-PROJECT.vercel.app/health
-https://YOUR-PROJECT.vercel.app/ready
+https://kaist-aci-erp.vercel.app/health
+https://kaist-aci-erp.vercel.app/ready
 ```
 
 둘 다 `{"status":"ok"}`를 반환해야 합니다.
@@ -61,7 +61,7 @@ Slack App 설정의 다음 세 Request URL에는 모두 아래 주소를 넣습�
 - Event Subscriptions
 
 ```text
-https://YOUR-PROJECT.vercel.app/slack/events
+https://kaist-aci-erp.vercel.app/slack/events
 ```
 
 이후 App Home의 `Manage Approval Rules`에서 학과·카테고리별 승인 채널, 승인 단계와 승인자를 설정합니다.

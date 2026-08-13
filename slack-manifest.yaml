@@ -12,7 +12,7 @@ features:
     always_online: false
   slash_commands:
     - command: /expense
-      url: https://example.com/slack/events
+      url: https://kaist-aci-erp.vercel.app/slack/events
       description: Start a new expense request
       usage_hint: Open the expense request form
       should_escape: false
@@ -26,12 +26,12 @@ oauth_config:
       - users:read
 settings:
   event_subscriptions:
-    request_url: https://example.com/slack/events
+    request_url: https://kaist-aci-erp.vercel.app/slack/events
     bot_events:
       - app_home_opened
   interactivity:
     is_enabled: true
-    request_url: https://example.com/slack/events
+    request_url: https://kaist-aci-erp.vercel.app/slack/events
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
