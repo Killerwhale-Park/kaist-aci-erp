@@ -1,3 +1,3 @@
-from app.ledger.repository import SlackLedgerRepository
+from app.ledger.repository import LedgerRepository
 
-__all__ = ["SlackLedgerRepository"]
+__all__ = ["LedgerRepository"]

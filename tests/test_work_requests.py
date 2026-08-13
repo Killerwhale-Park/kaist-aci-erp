@@ -12,7 +12,7 @@ from app.domain.work_requests import (
     work_request_from_created,
 )
 from app.exceptions import ApprovalPermissionError, InvalidStateTransitionError
-from app.ledger.repository import SlackLedgerRepository
+from app.ledger.repository import LedgerRepository
 from app.slack.messages import work_request_blocks
 from app.slack.modals import (
     expense_context_modal,
@@ -25,7 +25,7 @@ from app.work_requests import CreatePurchaseRequestCommand, CreateSettlementRequ
 ROOT_ADMIN = next(iter(default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]))
 
 
-async def register_test_channels(ledger: SlackLedgerRepository) -> None:
+async def register_test_channels(ledger: LedgerRepository) -> None:
     await ledger.replace_system_channels(
         ROOT_ADMIN,
         audit_channel_id="C_AUDIT",
@@ -76,9 +76,9 @@ def test_work_request_commands_require_https_urls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_purchase_request_round_trip_and_completion(slack_client, settings) -> None:
+async def test_purchase_request_round_trip_and_completion(slack_client, database) -> None:
     department = department_by_id("department_1")
-    ledger = SlackLedgerRepository(slack_client, settings)
+    ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     created = await ledger.create_work_request(
         purchase_created_data(purchase_command(), department)
@@ -101,9 +101,9 @@ async def test_purchase_request_round_trip_and_completion(slack_client, settings
 
 
 @pytest.mark.asyncio
-async def test_settlement_assignment_is_stored_in_selected_channel(slack_client, settings) -> None:
+async def test_settlement_assignment_is_stored_in_selected_channel(slack_client, database) -> None:
     department = department_by_id("department_2")
-    ledger = SlackLedgerRepository(slack_client, settings)
+    ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     created = await ledger.create_work_request(
         settlement_created_data(settlement_command(), department)
@@ -112,9 +112,9 @@ async def test_settlement_assignment_is_stored_in_selected_channel(slack_client,
     assert created.kind == WorkRequestKind.SETTLEMENT
     assert created.channel_id == "C_DEPARTMENT_2"
     assert created.assignee_slack_user_id == "U_STUDENT"
-    assert any(
-        message["ts"] == created.message_ts for message in slack_client.messages["C_DEPARTMENT_2"]
-    )
+    assert created.message_ts is None
+    await ledger.update_work_request_view(created, text="Settlement", blocks=[])
+    assert created.message_ts
     assert any(
         element.get("action_id") == "start_assigned_settlement"
         for block in work_request_blocks(created)

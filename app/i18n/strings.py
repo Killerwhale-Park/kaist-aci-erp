@@ -96,10 +96,6 @@ STRINGS = {
     "no_pending_approvals": "No approvals are waiting for you. / 대기 중인 승인이 없습니다.",
     "system_administration": "System Administration / 시스템 관리",
     "administration_title": "Administration / 관리",
-    "configuration_seed_notice": (
-        "Approval routing is stored in the selected private Slack channel.\n"
-        "승인 라우팅은 선택한 비공개 Slack 채널에 저장됩니다."
-    ),
     "manage_rules": "System Configuration / 시스템 설정",
     "manage_system_channels": "System Channels / 시스템 채널",
     "manage_roles": "Access Roles / 접근 역할",
@@ -107,14 +103,6 @@ STRINGS = {
     "admin_menu_notice": (
         "Only system administrators can change runtime configuration.\n"
         "시스템 관리자만 실행 중 설정을 변경할 수 있습니다."
-    ),
-    "system_channel_bootstrap_warning": (
-        ":warning: Bootstrap mode: copy the current System Config channel ID from Channel "
-        "details → About and set it as `SLACK_SYSTEM_CHANNEL_ID` in Vercel before inviting the "
-        "app to another private channel.\n"
-        ":warning: 부트스트랩 모드입니다. 현재 System Config 채널의 채널 세부정보 → 정보에서 "
-        "Channel ID를 복사해 Vercel의 `SLACK_SYSTEM_CHANNEL_ID`로 등록한 다음 앱을 다른 "
-        "비공개 채널에 초대해주세요."
     ),
     "select_rule": "Select Route / 라우팅 선택",
     "approval_rule_title": "Approval Routing / 승인 라우팅",
@@ -140,10 +128,10 @@ STRINGS = {
     "alerts_channel": "Alerts Channel / 오류 알림 채널",
     "additional_operating_channels": "Additional Operating Channels / 추가 운영 채널",
     "system_channels_notice": (
-        "The config channel comes from SLACK_SYSTEM_CHANNEL_ID. Select distinct audit and alert "
-        "channels, plus any work channels not already registered by approval routing.\n"
-        "설정 채널은 SLACK_SYSTEM_CHANNEL_ID로 지정됩니다. 서로 다른 감사·알림 채널과 "
-        "승인 라우팅에 포함되지 않은 추가 업무 채널을 선택해주세요."
+        "Configuration is stored in PostgreSQL. Select distinct audit and alert channels, plus "
+        "any work channels not already registered by approval routing.\n"
+        "설정은 PostgreSQL에 저장됩니다. 서로 다른 감사·알림 채널과 승인 라우팅에 "
+        "포함되지 않은 추가 업무 채널을 선택해주세요."
     ),
     "system_channels_error": (
         "Select distinct private channels that the app has joined.\n"

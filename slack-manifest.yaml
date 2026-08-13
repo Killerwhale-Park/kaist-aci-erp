@@ -21,7 +21,6 @@ oauth_config:
     bot:
       - chat:write
       - commands
-      - groups:history
       - groups:read
       - users:read
 settings:

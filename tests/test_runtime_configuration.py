@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy import func, select
 
 import app.config.roles as role_config
 from app.config.roles import (
@@ -13,20 +14,14 @@ from app.config.roles import (
     default_role_assignments,
     empty_role_set,
 )
-from app.config.settings import Settings
 from app.exceptions import ApprovalPermissionError
 from app.ledger.codec import encode_chunks
-from app.ledger.repository import (
-    _SHARED_CHANNEL_CACHE,
-    _SHARED_CHANNEL_INFO_CACHE,
-    _SHARED_CONFIG_CACHE,
-    _SHARED_HISTORY_CACHE,
-    _SHARED_MEMBER_CACHE,
-    CONFIG_ROOT,
-    ROLE_ASSIGNMENTS_SAVED,
-    RULE_SAVED,
+from app.ledger.repository import LedgerRepository
+from app.ledger.tables import AuditEventRecord, RoleAssignmentRecord
+from scripts.import_legacy_slack_config import (
     SYSTEM_CONFIG_ROOT,
-    SlackLedgerRepository,
+    SYSTEM_CONFIG_SNAPSHOT,
+    find_snapshot,
 )
 
 ROOT_ADMIN = next(iter(default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]))
@@ -45,10 +40,8 @@ def role_configuration() -> dict[str, dict[str, set[str]]]:
 
 
 @pytest.mark.asyncio
-async def test_system_snapshot_keeps_workflow_route_and_global_roles(
-    slack_client, settings: Settings
-) -> None:
-    ledger = SlackLedgerRepository(slack_client, settings)
+async def test_database_keeps_workflow_route_and_global_roles(slack_client, database) -> None:
+    ledger = LedgerRepository(slack_client, database)
     initial = await ledger.get_rule("department_1", "supplies")
     assert initial.workflow_id == "academic_development_approval"
     assert initial.approval_channel_id is None
@@ -65,16 +58,11 @@ async def test_system_snapshot_keeps_workflow_route_and_global_roles(
         ("U_ADMIN_STAFF",),
     ]
     assert "U_OUTSIDE_PROFESSOR" not in saved.steps[1].approver_slack_user_ids
-    assert not slack_client.messages["C_APPROVAL"]
-    assert any(
-        message.get("metadata", {}).get("event_type") == SYSTEM_CONFIG_ROOT
-        for message in slack_client.messages["C_SYSTEM"]
-    )
 
 
 @pytest.mark.asyncio
-async def test_channel_membership_scopes_global_roles(slack_client, settings: Settings) -> None:
-    ledger = SlackLedgerRepository(slack_client, settings)
+async def test_channel_membership_scopes_global_roles(slack_client, database) -> None:
+    ledger = LedgerRepository(slack_client, database)
     await ledger.replace_role_assignments(ROOT_ADMIN, role_configuration())
 
     await ledger.assert_can_submit_request("U_REQUESTER", "C_APPROVAL")
@@ -84,17 +72,15 @@ async def test_channel_membership_scopes_global_roles(slack_client, settings: Se
         "U_PROFESSOR",
         "U_ADMIN_STAFF",
     }
-    assert await ledger.settlement_assigner_ids("C_DEPARTMENT_2") == {
-        "U_OTHER_PROFESSOR",
-    }
+    assert await ledger.settlement_assigner_ids("C_DEPARTMENT_2") == {"U_OTHER_PROFESSOR"}
     assert await ledger.system_admin_ids() == {ROOT_ADMIN, "U_NEW_ADMIN"}
 
 
 @pytest.mark.asyncio
-async def test_system_channels_separate_config_audit_alerts_and_operations(
-    slack_client, settings: Settings
+async def test_system_channels_use_database_and_slack_only_as_projection(
+    slack_client, database
 ) -> None:
-    ledger = SlackLedgerRepository(slack_client, settings)
+    ledger = LedgerRepository(slack_client, database)
     await ledger.replace_system_channels(
         ROOT_ADMIN,
         audit_channel_id="C_AUDIT",
@@ -105,23 +91,24 @@ async def test_system_channels_separate_config_audit_alerts_and_operations(
     await ledger.report_alert("test alert")
 
     assert await ledger.registered_operation_channel_ids() == ["C_WORK"]
-    assert slack_client.messages["C_AUDIT"][-1]["metadata"]["event_type"] == ("system_audit_event")
+    assert slack_client.messages["C_AUDIT"][-1]["text"].startswith(
+        "System channel configuration updated"
+    )
     assert slack_client.messages["C_ALERTS"][-1]["text"] == "test alert"
     assert len(slack_client.messages["C_ALERTS"]) == 1
-    assert all(
-        message.get("metadata", {}).get("event_type") == SYSTEM_CONFIG_ROOT
-        for message in slack_client.messages["C_SYSTEM"]
-    )
+    async with database.session() as session:
+        audit_count = await session.scalar(select(func.count()).select_from(AuditEventRecord))
+    assert audit_count == 2
 
 
 @pytest.mark.asyncio
 async def test_new_role_is_added_through_role_configuration_only(
-    slack_client, settings: Settings, monkeypatch
+    slack_client, database, monkeypatch
 ) -> None:
     department_head = RoleDefinitionSeed(
         id="DEPARTMENT_HEAD",
         name_en="Department Heads",
-        name_ko="학과장",
+        name_ko="Department Heads",
         capabilities=frozenset({ASSIGN_SETTLEMENT}),
     )
     monkeypatch.setattr(
@@ -133,105 +120,50 @@ async def test_new_role_is_added_through_role_configuration_only(
     assignments[WORKSPACE_ROLE_SCOPE][department_head.id] = {"U_DEPARTMENT_HEAD"}
     slack_client.channel_members["C_APPROVAL"].add("U_DEPARTMENT_HEAD")
 
-    ledger = SlackLedgerRepository(slack_client, settings)
+    ledger = LedgerRepository(slack_client, database)
     await ledger.replace_role_assignments(ROOT_ADMIN, assignments)
 
     assert "U_DEPARTMENT_HEAD" in await ledger.settlement_assigner_ids("C_APPROVAL")
 
 
 @pytest.mark.asyncio
-async def test_configuration_cold_read_is_one_channel_and_warm_read_is_zero(
-    slack_client, settings: Settings
+async def test_configuration_survives_new_repository_and_empty_slack_history(
+    slack_client, database
 ) -> None:
-    for cache in (
-        _SHARED_CHANNEL_CACHE,
-        _SHARED_HISTORY_CACHE,
-        _SHARED_CONFIG_CACHE,
-        _SHARED_MEMBER_CACHE,
-        _SHARED_CHANNEL_INFO_CACHE,
-    ):
-        cache.clear()
-
-    ledger = SlackLedgerRepository(slack_client, settings)
+    ledger = LedgerRepository(slack_client, database)
     await ledger.replace_role_assignments(ROOT_ADMIN, role_configuration())
-    for cache in (_SHARED_CONFIG_CACHE, _SHARED_HISTORY_CACHE):
-        cache.clear()
-    slack_client.calls.clear()
+    await ledger.save_approval_route(ROOT_ADMIN, "department_1", "supplies", "C_APPROVAL")
+    slack_client.messages.clear()
 
-    await SlackLedgerRepository(slack_client, settings).role_assignments()
-    first_calls = dict(slack_client.calls)
-    await SlackLedgerRepository(slack_client, settings).role_assignments()
+    reloaded = LedgerRepository(slack_client, database)
+    assignments = await reloaded.role_assignments()
+    rule = await reloaded.get_rule("department_1", "supplies")
 
-    assert first_calls == {"conversations_history": 1}
-    assert dict(slack_client.calls) == first_calls
+    assert assignments[WORKSPACE_ROLE_SCOPE][PROFESSOR_ROLE] >= {"U_PROFESSOR"}
+    assert rule.approval_channel_id == "C_APPROVAL"
+    assert rule.is_complete
+    assert slack_client.calls["conversations_history"] == 0
+    async with database.session() as session:
+        stored_roles = await session.scalar(select(func.count()).select_from(RoleAssignmentRecord))
+    assert stored_roles > 0
 
 
 @pytest.mark.asyncio
-async def test_legacy_distributed_configuration_is_migrated_once(
-    slack_client, settings: Settings
-) -> None:
-    legacy_roles = encode_chunks(
-        record_type=ROLE_ASSIGNMENTS_SAVED,
-        data={
-            "scopes": {
-                "department_1": {
-                    "REQUESTER": ["U_REQUESTER"],
-                    STUDENT_COORDINATOR_ROLE: ["U_COORDINATOR"],
-                    PROFESSOR_ROLE: ["U_PROFESSOR"],
-                    ADMIN_STAFF_ROLE: ["U_ADMIN_STAFF"],
-                }
-            }
-        },
-    )[0]
-    legacy_route = encode_chunks(
-        record_type=RULE_SAVED,
-        data={
-            "department_id": "department_1",
-            "budget_program_id": "department_budget",
-            "category_id": "supplies",
-            "approval_channel_id": "C_APPROVAL",
-            "version": 3,
-        },
-    )[0]
-    await slack_client.chat_postMessage(
-        channel="C_APPROVAL",
-        text="legacy roles",
-        metadata={
-            "event_type": CONFIG_ROOT,
-            "event_payload": {
-                "configuration_type": "access_roles",
-                "key": "workspace",
-                "inline_record": legacy_roles,
-            },
-        },
+async def test_legacy_system_snapshot_can_be_read_for_one_time_import(slack_client) -> None:
+    encoded = encode_chunks(
+        record_type=SYSTEM_CONFIG_SNAPSHOT,
+        data={"roles": {PROFESSOR_ROLE: ["U_PROFESSOR"]}, "approval_routes": {}},
     )
+    assert len(encoded) == 1
     await slack_client.chat_postMessage(
-        channel="C_APPROVAL",
-        text="legacy route",
+        channel="C_SYSTEM",
+        text="legacy snapshot",
         metadata={
-            "event_type": CONFIG_ROOT,
-            "event_payload": {
-                "configuration_type": "approval_route",
-                "key": "department_1:supplies",
-                "inline_record": legacy_route,
-            },
+            "event_type": SYSTEM_CONFIG_ROOT,
+            "event_payload": {"inline_record": encoded[0]},
         },
     )
 
-    ledger = SlackLedgerRepository(slack_client, settings)
-    assignments = await ledger.role_assignments()
-    rule = await ledger.get_rule("department_1", "supplies")
+    snapshot = await find_snapshot(slack_client, "C_SYSTEM")
 
-    assert "U_REQUESTER" not in {
-        user_id for users in assignments[WORKSPACE_ROLE_SCOPE].values() for user_id in users
-    }
-    assert rule.approval_channel_id == "C_APPROVAL"
-    assert rule.version == 3
-    assert rule.is_complete
-    assert (
-        sum(
-            message.get("metadata", {}).get("event_type") == SYSTEM_CONFIG_ROOT
-            for message in slack_client.messages["C_SYSTEM"]
-        )
-        == 1
-    )
+    assert snapshot["roles"][PROFESSOR_ROLE] == ["U_PROFESSOR"]

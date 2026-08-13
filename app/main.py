@@ -1,11 +1,14 @@
 from fastapi import FastAPI, Request
 from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
+from sqlalchemy import text
 
 from app.config.settings import get_settings
+from app.database import Database
 from app.slack.app import create_slack_app
 
 settings = get_settings()
-slack_app = create_slack_app(settings)
+database = Database(settings.database_url)
+slack_app = create_slack_app(settings, database)
 slack_handler = AsyncSlackRequestHandler(slack_app)
 
 
@@ -19,8 +22,13 @@ async def health() -> dict[str, str]:
 
 @app.get("/ready")
 async def ready() -> dict[str, str]:
-    if not (settings.slack_bot_token and settings.slack_signing_secret):
+    if not (settings.slack_bot_token and settings.slack_signing_secret and database.configured):
         return {"status": "configuration_required"}
+    try:
+        async with database.session() as session:
+            await session.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
+    except Exception:
+        return {"status": "database_unavailable"}
     return {"status": "ok"}
 
 

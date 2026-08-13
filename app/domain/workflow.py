@@ -406,7 +406,7 @@ def apply_event(
     raise InvalidStateTransitionError(f"Unsupported event: {kind}")
 
 
-def replay_events(events: list[dict[str, Any]], *, message_ts: str) -> ExpenseRequest:
+def replay_events(events: list[dict[str, Any]], *, message_ts: str | None) -> ExpenseRequest:
     ordered = sorted(events, key=lambda item: item["ts"])
     created = next((item for item in ordered if item["kind"] == REQUEST_CREATED), None)
     if created is None:

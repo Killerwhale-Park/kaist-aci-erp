@@ -112,7 +112,7 @@ def apply_work_event(request: WorkRequest, kind: str, actor: str, event_time: da
     request.completed_at = event_time
 
 
-def replay_work_events(events: list[dict[str, Any]], *, message_ts: str) -> WorkRequest:
+def replay_work_events(events: list[dict[str, Any]], *, message_ts: str | None) -> WorkRequest:
     ordered = sorted(events, key=lambda item: item["ts"])
     created = next((item for item in ordered if item["kind"] == WORK_REQUEST_CREATED), None)
     if created is None:

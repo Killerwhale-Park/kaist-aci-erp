@@ -3,8 +3,11 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 from app.config.settings import Settings
+from app.database import Database
+from app.ledger.tables import Base
 
 
 class FakeSlackClient:
@@ -107,9 +110,19 @@ class FakeSlackClient:
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None, slack_system_channel_id="C_SYSTEM")
+    return Settings(_env_file=None, database_url="sqlite+aiosqlite:///:memory:")
 
 
 @pytest.fixture
 def slack_client() -> FakeSlackClient:
     return FakeSlackClient()
+
+
+@pytest_asyncio.fixture
+async def database(tmp_path) -> Database:
+    path = (tmp_path / "test.sqlite").as_posix()
+    database = Database(f"sqlite+aiosqlite:///{path}")
+    async with database.engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    yield database
+    await database.dispose()

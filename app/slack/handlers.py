@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from slack_sdk.errors import SlackApiError
 
 from app.config.roles import SYSTEM_ADMIN_ROLE, WORKSPACE_ROLE_SCOPE, role_definitions
-from app.config.settings import Settings
+from app.database import Database
 from app.domain.catalog import (
     budget_by_id,
     budget_node_by_id,
@@ -54,7 +54,7 @@ from app.expenses.schemas import (
     PostEvidenceCommand,
 )
 from app.i18n import t
-from app.ledger import SlackLedgerRepository
+from app.ledger import LedgerRepository
 from app.slack.home import app_home_view
 from app.slack.messages import (
     request_fallback_text,
@@ -84,9 +84,9 @@ from app.work_requests import CreatePurchaseRequestCommand, CreateSettlementRequ
 logger = logging.getLogger(__name__)
 
 
-def register_handlers(slack_app, settings: Settings) -> None:
-    def repository(client) -> SlackLedgerRepository:
-        return SlackLedgerRepository(client, settings)
+def register_handlers(slack_app, database: Database) -> None:
+    def repository(client) -> LedgerRepository:
+        return LedgerRepository(client, database)
 
     async def open_new_request(
         client,
@@ -1085,7 +1085,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
         opened = await safe_open_modal(
             client,
             body["trigger_id"],
-            administration_modal(bool(settings.slack_system_channel_id)),
+            administration_modal(),
             actor,
         )
         await ack()

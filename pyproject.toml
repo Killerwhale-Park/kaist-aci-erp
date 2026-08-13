@@ -3,16 +3,20 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "slack-student-expense-erp"
+name = "aic-expense-erp"
 version = "0.1.0"
-description = "Slack-native student expense pre-settlement and approval MVP"
+description = "Slack-native expense request and approval service with a PostgreSQL ledger"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.14,<2",
+    "aiosqlite>=0.20,<1",
     "aiohttp>=3.11,<4",
     "fastapi>=0.115,<1",
+    "psycopg[binary]>=3.2,<4",
     "pydantic-settings>=2.7,<3",
     "slack-bolt>=1.22,<2",
+    "sqlalchemy[asyncio]>=2.0,<3",
     "uvicorn[standard]>=0.34,<1",
 ]
 

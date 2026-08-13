@@ -1,17 +1,18 @@
 import hashlib
 
 import pytest
+from sqlalchemy import func, select
 
 from app.config.roles import SYSTEM_ADMIN_ROLE, WORKSPACE_ROLE_SCOPE, default_role_assignments
-from app.config.settings import Settings
 from app.domain.workflow import APPROVAL_STEP_APPROVED
-from app.ledger.repository import SlackLedgerRepository
+from app.ledger.repository import LedgerRepository
+from app.ledger.tables import ExpenseEventRecord
 from tests.test_approval_workflow import make_created
 
 ROOT_ADMIN = next(iter(default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]))
 
 
-async def register_test_channels(ledger: SlackLedgerRepository) -> None:
+async def register_test_channels(ledger: LedgerRepository) -> None:
     await ledger.replace_system_channels(
         ROOT_ADMIN,
         audit_channel_id="C_AUDIT",
@@ -21,13 +22,15 @@ async def register_test_channels(ledger: SlackLedgerRepository) -> None:
 
 
 @pytest.mark.asyncio
-async def test_expense_round_trip_and_history_filtering(slack_client, settings: Settings) -> None:
-    ledger = SlackLedgerRepository(slack_client, settings)
+async def test_expense_round_trip_and_indexed_filtering(slack_client, database) -> None:
+    ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     created = await ledger.create_request(make_created(2))
     assert created.reference_number == "EXP-TEST-1"
-    assert created.message_ts
+    assert created.message_ts is None
 
+    await ledger.update_request_view(created, text="Expense", blocks=[])
+    assert created.message_ts
     own = await ledger.list_for_applicant("U_STUDENT")
     pending = await ledger.list_pending_for_actor("U_APPROVER_1")
     assert [item.id for item in own] == ["REQ-1"]
@@ -40,44 +43,44 @@ async def test_expense_round_trip_and_history_filtering(slack_client, settings: 
 
 
 @pytest.mark.asyncio
-async def test_large_event_is_split_and_reassembled(slack_client, settings: Settings) -> None:
+async def test_large_payload_is_stored_as_one_database_event(slack_client, database) -> None:
     created_data = make_created(1)
     created_data["purpose"] = "".join(
         hashlib.sha256(str(index).encode()).hexdigest() for index in range(1000)
     )
-    ledger = SlackLedgerRepository(slack_client, settings)
+    ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     created = await ledger.create_request(created_data)
-    loaded = await ledger.get_request(created.slack_locator)
+    loaded = await ledger.get_request(created.id)
+
     assert loaded.purpose == created_data["purpose"]
-    thread_messages = [
-        item
-        for item in slack_client.messages["C_APPROVAL"]
-        if item.get("thread_ts") == created.message_ts
-    ]
-    assert len(thread_messages) > 1
+    async with database.session() as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(ExpenseEventRecord)
+            .where(ExpenseEventRecord.request_id == created.id)
+        )
+    assert count == 1
 
 
 @pytest.mark.asyncio
-async def test_locator_reads_one_message_without_channel_discovery(
-    slack_client, settings: Settings
-) -> None:
-    ledger = SlackLedgerRepository(slack_client, settings)
+async def test_legacy_slack_locator_resolves_by_database_id(slack_client, database) -> None:
+    ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     created = await ledger.create_request(make_created(1))
-    slack_client.calls.clear()
 
-    loaded = await ledger.get_request(created.slack_locator)
+    loaded = await ledger.get_request(f"C_APPROVAL|123.456|{created.id}")
 
     assert loaded.id == created.id
-    assert slack_client.calls["conversations_list"] == 0
-    assert slack_client.calls["conversations_history"] == 1
-    assert slack_client.calls["conversations_replies"] == 1
+    assert slack_client.calls["conversations_history"] == 0
+    assert slack_client.calls["conversations_replies"] == 0
 
 
 @pytest.mark.asyncio
-async def test_requests_are_stored_in_each_rules_channel(slack_client, settings: Settings) -> None:
-    ledger = SlackLedgerRepository(slack_client, settings)
+async def test_requests_are_persisted_independently_of_slack_channels(
+    slack_client, database
+) -> None:
+    ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     first_data = make_created(1)
     second_data = make_created(1)
@@ -87,13 +90,10 @@ async def test_requests_are_stored_in_each_rules_channel(slack_client, settings:
 
     first = await ledger.create_request(first_data)
     second = await ledger.create_request(second_data)
+    slack_client.messages.clear()
 
-    assert first.approval_channel_id == "C_APPROVAL"
-    assert second.approval_channel_id == "C_DEPARTMENT_2"
-    assert any(message["ts"] == first.message_ts for message in slack_client.messages["C_APPROVAL"])
-    assert any(
-        message["ts"] == second.message_ts for message in slack_client.messages["C_DEPARTMENT_2"]
-    )
+    assert (await ledger.get_request(first.id)).approval_channel_id == "C_APPROVAL"
+    assert (await ledger.get_request(second.id)).approval_channel_id == "C_DEPARTMENT_2"
     assert {request.id for request in await ledger.list_for_applicant("U_STUDENT")} == {
         "REQ-1",
         "REQ-2",

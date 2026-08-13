@@ -208,8 +208,6 @@ class ExpenseRequest:
 
     @property
     def slack_locator(self) -> str:
-        if self.message_ts:
-            return f"{self.approval_channel_id}|{self.message_ts}|{self.id}"
         return self.id
 
 
@@ -245,6 +243,4 @@ class WorkRequest:
 
     @property
     def slack_locator(self) -> str:
-        if self.message_ts:
-            return f"{self.channel_id}|{self.message_ts}|{self.id}"
         return self.id

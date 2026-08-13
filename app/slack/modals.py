@@ -417,20 +417,13 @@ def request_details_modal(request: ExpenseRequest) -> dict:
     }
 
 
-def administration_modal(system_channel_configured: bool = True) -> dict:
+def administration_modal() -> dict:
     blocks = [
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("admin_menu_notice")},
         }
     ]
-    if not system_channel_configured:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": t("system_channel_bootstrap_warning")},
-            }
-        )
     blocks.append(
         {
             "type": "actions",
