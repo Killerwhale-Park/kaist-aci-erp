@@ -118,7 +118,7 @@ def app_home_view(
                 "type": "button",
                 "action_id": "view_request",
                 "text": {"type": "plain_text", "text": t("view")},
-                "value": str(request.id),
+                "value": request.slack_locator,
             }
         ]
         if request.status == RequestStatus.CHANGES_REQUESTED:
@@ -127,7 +127,7 @@ def app_home_view(
                     "type": "button",
                     "action_id": "edit_request",
                     "text": {"type": "plain_text", "text": t("edit_request")},
-                    "value": str(request.id),
+                    "value": request.slack_locator,
                 }
             )
         has_missing_post_evidence = any(
@@ -148,7 +148,7 @@ def app_home_view(
                     "type": "button",
                     "action_id": "add_post_evidence",
                     "text": {"type": "plain_text", "text": t("submit_post_evidence")},
-                    "value": str(request.id),
+                    "value": request.slack_locator,
                 }
             )
         blocks.extend(
@@ -193,7 +193,7 @@ def app_home_view(
                         "type": "button",
                         "action_id": "view_request",
                         "text": {"type": "plain_text", "text": t("view")},
-                        "value": str(request.id),
+                        "value": request.slack_locator,
                     },
                 }
             )

@@ -12,12 +12,14 @@ AI Computing, AI System, AX, AI Future가 공동으로 사용하는 Slack 기반
 
 ## Slack 준비
 
-학과별·예산 항목별 운영 방식에 맞춰 비공개 승인 채널을 필요한 만큼 만듭니다. 하나의 채널을 여러 규칙이 공유해도 되고, 규칙마다 별도 채널을 사용해도 됩니다.
+다음 비공개 채널을 분리합니다.
 
-- 각 신청 메시지가 해당 채널의 원장입니다.
-- 상태 변경 이력은 신청 메시지의 스레드에 기록됩니다.
-- 봇과 해당 채널의 승인자를 채널에 초대합니다.
-- 봇은 이 업무에 사용하는 비공개 채널에만 초대합니다.
+- System Config: 관리자와 봇만 참여하며 최신 전체 설정 snapshot만 저장
+- Audit: 설정 변경 이력만 저장하며 애플리케이션의 읽기 대상이 아님
+- Alerts: 중복 억제된 운영 오류만 저장하며 애플리케이션의 읽기 대상이 아님
+- Operating: 실제 신청·승인 메시지와 상태 변경 thread를 저장
+
+학과별·재원별 운영 채널은 필요한 만큼 만들 수 있습니다. 하나의 채널을 여러 승인 route가 공유해도 됩니다.
 
 Bot scopes:
 
@@ -36,9 +38,12 @@ scope를 변경했다면 앱을 workspace에 다시 설치합니다. 봇은 사�
 ```text
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
+SLACK_SYSTEM_CHANNEL_ID=C...
 ```
 
-최초 복구 관리자는 `app/config/roles.py`의 Role Configuration에 명시합니다. 추가 신청 가능자, 교수, 행정팀, 시스템 관리자는 Slack App Home의 `Access Roles / 접근 역할`에서 관리합니다. 채널 ID는 환경변수로 관리하지 않습니다.
+`SLACK_SYSTEM_CHANNEL_ID`만 고정 locator로 사용합니다. 학과·재원별 운영 채널, Audit, Alerts 채널은 Slack UI에서 관리합니다. 앱이 아직 비공개 채널 하나에만 참여한 초기 상태에서는 그 채널을 임시 System Config 채널로 자동 인식하지만, 다른 채널을 초대하기 전에 이 환경변수를 반드시 등록합니다.
+
+최초 복구 관리자는 `app/config/roles.py`에 명시합니다. 학생 담당자·교수·행정팀·시스템 관리자는 App Home의 `Access Roles / 접근 역할`에서 워크스페이스 공통 Role로 관리합니다. 일반 학생은 별도 등록하지 않고 운영 채널 멤버십으로 신청 자격을 얻습니다. 실제 승인 권한은 `Role 보유자 ∩ 운영 채널 멤버`로 계산됩니다.
 
 ## Vercel 배포
 
@@ -64,7 +69,13 @@ Slack App 설정의 다음 세 Request URL에는 모두 아래 주소를 넣습�
 https://kaist-aci-erp.vercel.app/slack/events
 ```
 
-이후 App Home의 `System Configuration`에서 학과·재원 항목별 승인 채널과 Role 담당자를 설정합니다. Workflow 단계는 `app/config/workflows.py`, 재원→workflow 연결은 `app/config/workflow_mappings.py`에 독립적으로 정의됩니다.
+배포 후 설정 순서:
+
+1. `System Configuration → System Channels`에서 Audit, Alerts, 추가 운영 채널을 지정합니다.
+2. `Access Roles`에서 워크스페이스 공통 Role을 지정합니다.
+3. `Approval Routing`에서 학과·재원별 운영 채널을 지정합니다.
+
+Workflow 단계는 `app/config/workflows.py`, 재원→workflow 연결은 `app/config/workflow_mappings.py`에 독립적으로 정의됩니다.
 
 ## Slack 사용
 
@@ -80,7 +91,7 @@ App Home에서 다음 작업을 시작합니다.
 
 학과별 예산과 학과 학생회 예산은 공통 기본 양식을 사용하되 학과별 override를 둘 수 있습니다. 단과대 예산은 global scope이므로 신청자 학과와 관계없이 하나의 mapping을 사용합니다.
 
-구매 요청과 정산 요청은 같은 채널 또는 서로 다른 채널로 보낼 수 있습니다. 선택 가능한 비공개 채널에는 봇을 `/invite @Expense Support ERP`로 미리 초대합니다. 승인 채널에는 승인자도 모두 참여해야 합니다.
+구매 요청과 정산 요청은 같은 채널 또는 서로 다른 채널로 보낼 수 있습니다. Approval Routing에 없는 업무 채널은 `System Channels → Additional Operating Channels`에 등록합니다. 운영 채널에는 봇과 해당 업무 참여자를 초대합니다.
 
 신청자 구분에서 학생을 선택하면 학번, 교수를 선택하면 사번을 입력합니다.
 

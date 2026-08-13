@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     slack_bot_token: str = ""
     slack_signing_secret: str = ""
+    slack_system_channel_id: str = ""
 
 
 @lru_cache

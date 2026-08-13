@@ -206,6 +206,12 @@ class ExpenseRequest:
     message_ts: str | None = None
     revision: int = 1
 
+    @property
+    def slack_locator(self) -> str:
+        if self.message_ts:
+            return f"{self.approval_channel_id}|{self.message_ts}|{self.id}"
+        return self.id
+
 
 @dataclass(frozen=True)
 class UserProfile:
@@ -236,3 +242,9 @@ class WorkRequest:
     completed_by_slack_user_id: str | None = None
     completed_at: datetime | None = None
     message_ts: str | None = None
+
+    @property
+    def slack_locator(self) -> str:
+        if self.message_ts:
+            return f"{self.channel_id}|{self.message_ts}|{self.id}"
+        return self.id

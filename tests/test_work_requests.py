@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
+from app.config.roles import SYSTEM_ADMIN_ROLE, WORKSPACE_ROLE_SCOPE, default_role_assignments
 from app.domain.catalog import department_by_id
 from app.domain.enums import WorkRequestKind, WorkRequestStatus
 from app.domain.work_requests import (
@@ -20,6 +21,17 @@ from app.slack.modals import (
     settlement_request_modal,
 )
 from app.work_requests import CreatePurchaseRequestCommand, CreateSettlementRequestCommand
+
+ROOT_ADMIN = next(iter(default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]))
+
+
+async def register_test_channels(ledger: SlackLedgerRepository) -> None:
+    await ledger.replace_system_channels(
+        ROOT_ADMIN,
+        audit_channel_id="C_AUDIT",
+        alerts_channel_id="C_ALERTS",
+        additional_operating_channel_ids=["C_APPROVAL", "C_DEPARTMENT_2"],
+    )
 
 
 def purchase_command() -> CreatePurchaseRequestCommand:
@@ -67,6 +79,7 @@ def test_work_request_commands_require_https_urls() -> None:
 async def test_purchase_request_round_trip_and_completion(slack_client, settings) -> None:
     department = department_by_id("department_1")
     ledger = SlackLedgerRepository(slack_client, settings)
+    await register_test_channels(ledger)
     created = await ledger.create_work_request(
         purchase_created_data(purchase_command(), department)
     )
@@ -78,19 +91,20 @@ async def test_purchase_request_round_trip_and_completion(slack_client, settings
     assert created.amount == 49000
 
     with pytest.raises(ApprovalPermissionError):
-        await ledger.complete_work_request(created.id, "U_STRANGER")
+        await ledger.complete_work_request(created.slack_locator, "U_STRANGER")
 
-    completed = await ledger.complete_work_request(created.id, "U_PROF")
+    completed = await ledger.complete_work_request(created.slack_locator, "U_PROF")
     assert completed.status == WorkRequestStatus.COMPLETED
     assert completed.completed_by_slack_user_id == "U_PROF"
     with pytest.raises(InvalidStateTransitionError):
-        await ledger.complete_work_request(created.id, "U_PROF")
+        await ledger.complete_work_request(created.slack_locator, "U_PROF")
 
 
 @pytest.mark.asyncio
 async def test_settlement_assignment_is_stored_in_selected_channel(slack_client, settings) -> None:
     department = department_by_id("department_2")
     ledger = SlackLedgerRepository(slack_client, settings)
+    await register_test_channels(ledger)
     created = await ledger.create_work_request(
         settlement_created_data(settlement_command(), department)
     )

@@ -76,8 +76,9 @@ from app.slack.modals import (
     request_details_modal,
     role_configuration_modal,
     settlement_request_modal,
+    system_channels_modal,
 )
-from app.slack.utils import state_selected_users, state_value
+from app.slack.utils import state_selected_conversations, state_selected_users, state_value
 from app.work_requests import CreatePurchaseRequestCommand, CreateSettlementRequestCommand
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,6 @@ def register_handlers(slack_app, settings: Settings) -> None:
         source_work_request_id: str | None = None,
         selected_budget_node_ids: tuple[str, ...] = (),
     ) -> None:
-        await repository(client).assert_can_submit_request(slack_user_id)
         view = expense_context_modal(
             slack_user_id,
             departments(),
@@ -110,11 +110,6 @@ def register_handlers(slack_app, settings: Settings) -> None:
     async def publish_home(client, slack_user_id: str) -> None:
         ledger = repository(client)
         admins = await ledger.system_admin_ids()
-        try:
-            await ledger.assert_can_submit_request(slack_user_id)
-            can_submit = True
-        except ApprovalPermissionError:
-            can_submit = False
         can_assign_settlement = slack_user_id in await ledger.settlement_assigner_ids()
         profile = UserProfile(
             slack_user_id=slack_user_id,
@@ -126,7 +121,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             await ledger.list_for_applicant(slack_user_id),
             await ledger.list_pending_for_actor(slack_user_id),
             can_assign_settlement,
-            can_submit_requests=can_submit,
+            can_submit_requests=True,
         )
         await client.views_publish(user_id=slack_user_id, view=view)
 
@@ -156,6 +151,12 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except SlackApiError:
             logger.exception("Failed to send Slack DM to %s", slack_user_id)
 
+    async def safe_alert(client, text: str) -> None:
+        try:
+            await repository(client).report_alert(text)
+        except Exception:
+            logger.exception("Failed to publish a system alert")
+
     async def modal_failure_dm(client, slack_user_id: str, error_code: str) -> None:
         message_key = (
             "form_open_expired"
@@ -171,6 +172,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             else "form_open_error"
         )
         await safe_dm(client, slack_user_id, f"{t(message_key)}\n`{error_code}`")
+        await safe_alert(client, f"Slack modal failure: `{error_code}`")
 
     async def safe_open_modal(client, trigger_id: str, view: dict, slack_user_id: str):
         try:
@@ -230,7 +232,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
                                 "action_id": "edit_request",
                                 "style": "primary",
                                 "text": {"type": "plain_text", "text": t("edit_request")},
-                                "value": request.id,
+                                "value": request.slack_locator,
                             }
                         ],
                     },
@@ -263,7 +265,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
                                     "type": "plain_text",
                                     "text": t("submit_post_evidence"),
                                 },
-                                "value": request.id,
+                                "value": request.slack_locator,
                             }
                         ],
                     },
@@ -343,31 +345,6 @@ def register_handlers(slack_app, settings: Settings) -> None:
             evidence_folder_url=state_value(state, "evidence_folder"),
             evidence=evidence_from_state(state),
         )
-
-    async def approval_channel_accepts_configuration(
-        client, channel_id: str, steps: list[dict]
-    ) -> bool:
-        try:
-            channel = (await client.conversations_info(channel=channel_id))["channel"]
-            if not channel.get("is_private") or not channel.get("is_member"):
-                return False
-            member_ids: set[str] = set()
-            cursor: str | None = None
-            while True:
-                response = await client.conversations_members(
-                    channel=channel_id,
-                    limit=200,
-                    **({"cursor": cursor} if cursor else {}),
-                )
-                member_ids.update(response.get("members", []))
-                cursor = response.get("response_metadata", {}).get("next_cursor") or None
-                if not cursor:
-                    break
-            selected = {user_id for step in steps for user_id in step["approver_slack_user_ids"]}
-            return selected.issubset(member_ids)
-        except SlackApiError:
-            logger.exception("Failed to validate approval channel membership")
-            return False
 
     def pydantic_errors(error: ValidationError) -> dict[str, str]:
         errors: dict[str, str] = {}
@@ -502,12 +479,6 @@ def register_handlers(slack_app, settings: Settings) -> None:
     @slack_app.action("new_purchase_work_request")
     async def new_purchase_work_request(ack, body, client):
         actor = body["user"]["id"]
-        try:
-            await repository(client).assert_can_submit_request(actor)
-        except ApprovalPermissionError:
-            await ack()
-            await safe_dm(client, actor, t("requester_role_required"))
-            return
         await safe_open_modal(
             client,
             body["trigger_id"],
@@ -552,7 +523,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             department = department_by_id(command.department_id)
             if department is None:
                 raise ConfigurationError
-            await repository(client).assert_can_submit_request(actor, command.department_id)
+            await repository(client).assert_channel_member(actor, command.channel_id)
         except ValidationError as error:
             field_blocks = {
                 "department_id": "work_department",
@@ -594,6 +565,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             return
         except Exception:
             logger.exception("Failed to create a purchase request")
+            await safe_alert(client, "Purchase request persistence failed")
             await ack(
                 response_action="errors",
                 errors={"work_channel": t("submission_error")},
@@ -628,7 +600,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             department = department_by_id(command.department_id)
             if department is None:
                 raise ConfigurationError
-            await repository(client).assert_can_assign_settlement(actor, command.department_id)
+            await repository(client).assert_can_assign_settlement(actor, command.channel_id)
         except ValidationError as error:
             field_blocks = {
                 "department_id": "work_department",
@@ -679,6 +651,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             return
         except Exception:
             logger.exception("Failed to create a settlement request")
+            await safe_alert(client, "Settlement request persistence failed")
             await ack(
                 response_action="errors",
                 errors={"work_channel": t("submission_error")},
@@ -717,7 +690,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             body["trigger_id"],
             actor,
             initial_department_id=request.department_id,
-            source_work_request_id=request.id,
+            source_work_request_id=request.slack_locator,
         )
         await ack()
 
@@ -809,8 +782,10 @@ def register_handlers(slack_app, settings: Settings) -> None:
             return
         ledger = repository(client)
         try:
-            await ledger.assert_can_submit_request(body["user"]["id"], department_id)
             rule = await ledger.get_rule(department_id, category_id)
+            if not rule.approval_channel_id:
+                raise ConfigurationError
+            await ledger.assert_can_submit_request(body["user"]["id"], rule.approval_channel_id)
         except ApprovalPermissionError:
             await ack(
                 response_action="errors",
@@ -934,6 +909,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             await publish_home(client, actor)
         except Exception:
             logger.exception("Failed to create an expense ledger record")
+            await safe_alert(client, "Expense request persistence failed")
             await safe_dm(client, actor, t("submission_error"))
 
     @slack_app.action("approve_request")
@@ -1106,10 +1082,69 @@ def register_handlers(slack_app, settings: Settings) -> None:
     @slack_app.action("manage_rules")
     async def manage_rules_action(ack, body, client):
         actor = body["user"]["id"]
-        opened = await safe_open_modal(client, body["trigger_id"], administration_modal(), actor)
+        opened = await safe_open_modal(
+            client,
+            body["trigger_id"],
+            administration_modal(bool(settings.slack_system_channel_id)),
+            actor,
+        )
         await ack()
         if opened is None:
             return
+
+    @slack_app.action("configure_system_channels")
+    async def configure_system_channels_action(ack, body, client):
+        actor = body["user"]["id"]
+        try:
+            ledger = repository(client)
+            await ledger.assert_system_admin(actor)
+            channel_configuration = await ledger.system_channels()
+        except ApprovalPermissionError:
+            await ack()
+            await safe_dm(client, actor, t("unauthorized"))
+            return
+        except (ConfigurationError, SlackApiError):
+            logger.exception("Failed to load system channel configuration")
+            await ack()
+            await safe_dm(client, actor, t("configuration_load_error"))
+            return
+        await safe_push_modal(
+            client,
+            body["trigger_id"],
+            system_channels_modal(channel_configuration),
+            actor,
+        )
+        await ack()
+
+    @slack_app.view("system_channels_editor")
+    async def submit_system_channels_editor(ack, body, client):
+        state = body["view"]["state"]
+        audit_channel_id = state_value(state, "audit_channel")
+        alerts_channel_id = state_value(state, "alerts_channel")
+        additional = state_selected_conversations(state, "additional_operating_channels")
+        actor = body["user"]["id"]
+        try:
+            await repository(client).replace_system_channels(
+                actor,
+                audit_channel_id=audit_channel_id or "",
+                alerts_channel_id=alerts_channel_id or "",
+                additional_operating_channel_ids=additional,
+            )
+        except ApprovalPermissionError:
+            await ack(
+                response_action="errors",
+                errors={"audit_channel": t("unauthorized")},
+            )
+            return
+        except ConfigurationError:
+            await ack(
+                response_action="errors",
+                errors={"audit_channel": t("system_channels_error")},
+            )
+            return
+        await ack()
+        await safe_dm(client, actor, t("system_channels_saved"))
+        await publish_home(client, actor)
 
     @slack_app.action("configure_approval_rules")
     async def configure_approval_rules_action(ack, body, client):
@@ -1184,28 +1219,14 @@ def register_handlers(slack_app, settings: Settings) -> None:
         metadata = json.loads(body["view"]["private_metadata"])
         state = body["view"]["state"]
         channel_id = state_value(state, "approval_channel")
-        try:
-            ledger = repository(client)
-            rule = await ledger.get_rule(metadata["department_id"], metadata["category_id"])
-        except (ConfigurationError, EntityNotFoundError):
-            await ack(
-                response_action="errors",
-                errors={"approval_channel": t("configuration_error")},
-            )
-            return
-        steps = [
-            {"approver_slack_user_ids": list(step.approver_slack_user_ids)} for step in rule.steps
-        ]
-        if not channel_id or not await approval_channel_accepts_configuration(
-            client, channel_id, steps
-        ):
+        if not channel_id:
             await ack(
                 response_action="errors",
                 errors={"approval_channel": t("channel_membership_error")},
             )
             return
         try:
-            saved = await ledger.save_approval_route(
+            saved = await repository(client).save_approval_route(
                 actor,
                 metadata["department_id"],
                 metadata["category_id"],
@@ -1244,7 +1265,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
         await safe_push_modal(
             client,
             body["trigger_id"],
-            role_configuration_modal(assignments, departments()),
+            role_configuration_modal(assignments),
             actor,
         )
         await ack()
@@ -1260,17 +1281,8 @@ def register_handlers(slack_app, settings: Settings) -> None:
                         f"access_role__{WORKSPACE_ROLE_SCOPE}__{role.id}",
                     )
                 )
-                for role in role_definitions(department_scoped=False)
-            },
-            **{
-                department.id: {
-                    role.id: set(
-                        state_selected_users(state, f"access_role__{department.id}__{role.id}")
-                    )
-                    for role in role_definitions(department_scoped=True)
-                }
-                for department in departments()
-            },
+                for role in role_definitions()
+            }
         }
         if not assignments[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]:
             await ack(

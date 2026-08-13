@@ -177,20 +177,20 @@ def request_message_blocks(request: ExpenseRequest, *, include_actions: bool = T
                         "action_id": "approve_request",
                         "style": "primary",
                         "text": {"type": "plain_text", "text": t("approve")},
-                        "value": str(request.id),
+                        "value": request.slack_locator,
                     },
                     {
                         "type": "button",
                         "action_id": "request_changes",
                         "text": {"type": "plain_text", "text": t("request_changes")},
-                        "value": str(request.id),
+                        "value": request.slack_locator,
                     },
                     {
                         "type": "button",
                         "action_id": "reject_request",
                         "style": "danger",
                         "text": {"type": "plain_text", "text": t("reject")},
-                        "value": str(request.id),
+                        "value": request.slack_locator,
                     },
                 ],
             }
@@ -293,7 +293,7 @@ def work_request_blocks(request: WorkRequest) -> list[dict]:
                     "action_id": "start_assigned_settlement",
                     "style": "primary",
                     "text": {"type": "plain_text", "text": t("start_settlement")},
-                    "value": request.id,
+                    "value": request.slack_locator,
                 }
             )
         actions.append(
@@ -301,7 +301,7 @@ def work_request_blocks(request: WorkRequest) -> list[dict]:
                 "type": "button",
                 "action_id": "complete_work_request",
                 "text": {"type": "plain_text", "text": t("mark_completed")},
-                "value": request.id,
+                "value": request.slack_locator,
             }
         )
         blocks.append({"type": "actions", "elements": actions})

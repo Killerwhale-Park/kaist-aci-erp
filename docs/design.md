@@ -20,17 +20,18 @@ Slack Modal / App Home / Buttons / DM
 
 ## Channel model
 
-중앙 원장 채널은 없습니다. 각 승인 route는 비공개 채널 하나를 지정하며, 학과별·항목별로 같은 채널을 공유하거나 서로 다른 채널을 선택할 수 있습니다.
+채널은 읽기·쓰기 특성에 따라 분리합니다.
 
-봇은 `conversations.list`로 자신이 참여한 비공개 채널을 찾고 각 채널의 메시지 metadata를 조회합니다. 따라서 채널 ID를 환경변수에 넣지 않습니다.
+- System Config Channel: 최신 `system_configuration_snapshot`만 저장
+- Audit Channel: 설정 변경 event를 append-only로 저장하며 요청 경로에서 읽지 않음
+- Alerts Channel: 60초 단위로 중복 억제된 운영 경고를 저장하며 요청 경로에서 읽지 않음
+- Operating Channel: `expense_record`, `work_request_record`와 각 상태 변경 thread를 저장
 
-채널에는 세 종류의 root message가 저장됩니다.
+`SLACK_SYSTEM_CHANNEL_ID`는 설정 원장을 찾기 위한 유일한 배포 locator입니다. 운영·Audit·Alerts 채널 ID는 System Config snapshot에 저장합니다. 설정을 모든 운영 채널에 복제하지 않습니다.
 
-- `expense_record`: 신청 한 건의 현재 상태와 승인 버튼
-- `work_request_record`: 구매 요청 또는 학생 정산 요청의 현재 상태와 완료 버튼
-- `configuration_record`: 승인 route 또는 접근 Role 설정
+System Config는 설정 변경마다 전체 snapshot을 새 root message로 기록합니다. 일반적인 크기는 root metadata에 압축 inline하고, 커지면 thread chunk로 분리합니다. 최초 cold read는 System Config history 한 번이며 warm instance는 TTL cache를 사용합니다. 구버전 `configuration_record`만 발견되면 전체 채널을 한 번 탐색해 최신 Role과 route를 새 snapshot으로 이관합니다.
 
-신청 메시지의 thread에는 `expense_event_chunk`, 설정 메시지의 thread에는 `configuration_chunk`가 append-only로 추가됩니다. 큰 payload는 zlib 압축 후 여러 metadata message로 나눕니다. 모든 chunk가 있는 event만 유효합니다.
+신청 메시지의 thread에는 `expense_event_chunk`, 업무 요청 thread에는 `work_request_event_chunk`가 append-only로 추가됩니다. 큰 payload는 zlib 압축 후 여러 metadata message로 나눕니다. 모든 chunk가 있는 event만 유효합니다.
 
 구매 요청과 정산 요청은 생성할 때 게시 채널을 선택합니다. 같은 채널을 공유해도 되고 별도 채널로 분리해도 됩니다. 생성과 완료 이력은 `work_request_event_chunk`로 해당 메시지 thread에 저장합니다. 정산 요청 생성은 교수·행정팀·시스템 관리자 Role에게만 허용합니다.
 
@@ -91,23 +92,22 @@ Slack 모달은 선택한 노드의 자식만 다음 selector로 추가합니다
 
 ## Access role configuration
 
-접근 권한은 승인 workflow와 독립적인 Role 축입니다. Role 정의는 ID·표시명·scope·capability를 가진 configuration이며, Role assignment는 학과 scope를 가지므로 다른 학과의 담당자가 승인 후보에 섞이지 않습니다.
+접근 권한은 승인 workflow와 독립적인 전역 Role 축입니다. Role 정의는 ID·표시명·capability를 가진 configuration입니다.
 
-- `REQUESTER`: 신청 가능자
 - `STUDENT_COORDINATOR`: 학생 담당자
-- `PROFESSOR`: 교수, 신청 및 정산 지정 가능
-- `ADMIN_STAFF`: 행정팀, 신청 및 정산 지정 가능
-- `SYSTEM_ADMIN`: Role·승인 route 관리 및 모든 운영 권한
+- `PROFESSOR`: 교수, 정산 요청 지정 가능
+- `ADMIN_STAFF`: 행정팀, 정산 요청 지정 가능
+- `SYSTEM_ADMIN`: System Channel·Role·승인 route 관리
 
-Workflow step은 사용자 ID가 아닌 필요 Role을 참조합니다. 신청 시점에 `신청 학과 + Role`을 실제 Slack 사용자로 해석해 snapshot을 만듭니다. 최초 복구 관리자는 source configuration에 유지하고, 추가 Role 배정은 Slack 관리 모달에서 저장합니다.
+일반 학생은 별도 Role allowlist에 등록하지 않으며 운영 채널 멤버십으로 신청 자격을 얻습니다. 학과 범위를 Role assignment에 중복 저장하지 않습니다. 운영 채널이 업무 Context를 나타내며 신청자는 해당 운영 채널 멤버여야 합니다. Workflow step의 실제 승인자는 `전역 Role 보유자 ∩ 승인 채널 멤버`로 계산해 신청 시점 snapshot에 고정합니다. 담당자가 교체되어도 기존 신청의 승인자는 바뀌지 않습니다.
 
 현재 학사계발비 workflow는 `학생 담당자 확인 → 담당 교수 승인·검수 → 행정팀 검토`입니다. 엔진·Slack 모달·권한 검사는 구체적인 Role 목록이나 단계 수를 알지 못하며 configuration을 순회합니다. 학과장·학생회장 승인이 추가되어도 Role 정의와 workflow configuration만 변경하고, 사람 교체는 Slack Role assignment만 바꿉니다.
 
 ## Query and configuration
 
-App Home 조회 시 root metadata를 먼저 필터링합니다. 신청자 또는 현재 승인자가 일치하는 메시지만 thread를 replay합니다.
+승인 버튼과 DM·App Home 버튼의 value에는 `channel_id + message_ts + record_id` locator를 넣습니다. 개별 신청 조회는 정확한 메시지 한 건을 직접 가져오며 전체 채널을 검색하지 않습니다. 구버전 UUID-only 버튼은 등록된 운영 채널을 조회하는 fallback으로 호환합니다.
 
-승인 route와 Role assignment는 Slack configuration message에 저장됩니다. 작은 설정값은 root metadata에 inline하여 thread 조회를 제거하고, 함수 instance TTL cache로 반복 전수 조회를 피합니다. 새 신청은 해석된 workflow·Role 담당자를 snapshot으로 저장하므로 이후 정책이나 담당자 변경이 기존 신청을 바꾸지 않습니다.
+App Home 목록은 System Config에 등록된 운영 채널만 조회하고 root metadata에서 신청자 또는 현재 승인자가 일치하는 메시지만 thread를 replay합니다. `conversations.list`로 임의의 채널을 발견하거나 Audit·Alerts 채널을 읽지 않습니다.
 
 ## Retention
 

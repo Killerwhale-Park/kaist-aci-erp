@@ -27,6 +27,13 @@ def state_selected_users(
     return list(element.get("selected_users") or [])
 
 
+def state_selected_conversations(
+    state: dict[str, Any], block_id: str, action_id: str = "value"
+) -> list[str]:
+    element = state.get("values", {}).get(block_id, {}).get(action_id, {})
+    return list(element.get("selected_conversations") or [])
+
+
 def input_element(
     action_id: str,
     *,

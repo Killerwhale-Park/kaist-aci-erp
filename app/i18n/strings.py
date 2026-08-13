@@ -45,8 +45,8 @@ STRINGS = {
         "Work request {reference} was completed.\n업무 요청 {reference}을 완료했습니다."
     ),
     "channel_unavailable": (
-        "The app is not a member of this private channel.\n"
-        "앱이 참여 중인 비공개 채널을 선택해주세요."
+        "Select a registered operating channel that the app has joined.\n"
+        "System Channels에 등록되고 앱이 참여 중인 운영 채널을 선택해주세요."
     ),
     "submit": "Submit / 제출",
     "continue": "Continue / 계속",
@@ -101,11 +101,20 @@ STRINGS = {
         "승인 라우팅은 선택한 비공개 Slack 채널에 저장됩니다."
     ),
     "manage_rules": "System Configuration / 시스템 설정",
+    "manage_system_channels": "System Channels / 시스템 채널",
     "manage_roles": "Access Roles / 접근 역할",
     "configure_rules": "Approval Routing / 승인 라우팅",
     "admin_menu_notice": (
         "Only system administrators can change runtime configuration.\n"
         "시스템 관리자만 실행 중 설정을 변경할 수 있습니다."
+    ),
+    "system_channel_bootstrap_warning": (
+        ":warning: Bootstrap mode: copy the current System Config channel ID from Channel "
+        "details → About and set it as `SLACK_SYSTEM_CHANNEL_ID` in Vercel before inviting the "
+        "app to another private channel.\n"
+        ":warning: 부트스트랩 모드입니다. 현재 System Config 채널의 채널 세부정보 → 정보에서 "
+        "Channel ID를 복사해 Vercel의 `SLACK_SYSTEM_CHANNEL_ID`로 등록한 다음 앱을 다른 "
+        "비공개 채널에 초대해주세요."
     ),
     "select_rule": "Select Route / 라우팅 선택",
     "approval_rule_title": "Approval Routing / 승인 라우팅",
@@ -123,10 +132,24 @@ STRINGS = {
         "라우팅은 저장했지만 필수 Role 중 담당자가 없는 항목이 있습니다."
     ),
     "channel_membership_error": (
-        "The app and every member assigned to a required role must be in the private approval "
-        "channel.\n"
-        "앱과 필수 역할에 배정된 모든 담당자는 비공개 승인 채널의 멤버여야 합니다."
+        "Select a private operating channel that the app has joined.\n"
+        "앱이 참여한 비공개 운영 채널을 선택해주세요."
     ),
+    "system_channels_title": "System Channels / 시스템 채널",
+    "audit_channel": "Audit Channel / 감사 로그 채널",
+    "alerts_channel": "Alerts Channel / 오류 알림 채널",
+    "additional_operating_channels": "Additional Operating Channels / 추가 운영 채널",
+    "system_channels_notice": (
+        "The config channel comes from SLACK_SYSTEM_CHANNEL_ID. Select distinct audit and alert "
+        "channels, plus any work channels not already registered by approval routing.\n"
+        "설정 채널은 SLACK_SYSTEM_CHANNEL_ID로 지정됩니다. 서로 다른 감사·알림 채널과 "
+        "승인 라우팅에 포함되지 않은 추가 업무 채널을 선택해주세요."
+    ),
+    "system_channels_error": (
+        "Select distinct private channels that the app has joined.\n"
+        "앱이 참여한 서로 다른 비공개 채널을 선택해주세요."
+    ),
+    "system_channels_saved": "System channels updated. / 시스템 채널을 변경했습니다.",
     "roles_title": "Access Roles / 접근 역할",
     "role_requesters": "Eligible Requesters / 신청 가능자",
     "role_student_coordinators": "Student Coordinators / 학생 담당자",
@@ -135,8 +158,10 @@ STRINGS = {
     "role_system_admins": "System Administrators / 시스템 관리자",
     "workspace_roles": "Workspace / 전체 워크스페이스",
     "role_configuration_notice": (
-        "Workflow steps are defined in policy configuration; assign actual members to roles here.\n"
-        "Workflow 단계는 정책 configuration에 정의되며, 여기서 Role의 실제 담당자를 배정합니다."
+        "Roles are workspace-wide qualifications. Actual authority is the intersection of a role "
+        "and membership in the operating channel.\n"
+        "Role은 워크스페이스 공통 자격이며, 실제 권한은 Role과 운영 채널 멤버십의 "
+        "교집합으로 결정됩니다."
     ),
     "admin_required": "Select at least one administrator. / 관리자를 한 명 이상 선택해주세요.",
     "roles_saved": "Access roles updated. / 접근 역할을 변경했습니다.",
@@ -155,8 +180,8 @@ STRINGS = {
         "You are not authorized to approve this request.\n이 요청을 승인할 권한이 없습니다."
     ),
     "requester_role_required": (
-        "An administrator must add you as an eligible requester before you can submit requests.\n"
-        "관리자가 신청 가능자로 추가한 후에 신청할 수 있습니다."
+        "You must be a member of the selected operating channel.\n"
+        "선택한 운영 채널의 멤버여야 신청할 수 있습니다."
     ),
     "not_applicant": (
         "Only the applicant can update this request.\n신청자 본인만 이 요청을 수정할 수 있습니다."

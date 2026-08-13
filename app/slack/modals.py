@@ -417,34 +417,120 @@ def request_details_modal(request: ExpenseRequest) -> dict:
     }
 
 
-def administration_modal() -> dict:
+def administration_modal(system_channel_configured: bool = True) -> dict:
+    blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": t("admin_menu_notice")},
+        }
+    ]
+    if not system_channel_configured:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": t("system_channel_bootstrap_warning")},
+            }
+        )
+    blocks.append(
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "configure_system_channels",
+                    "style": "primary",
+                    "text": {"type": "plain_text", "text": t("manage_system_channels")},
+                    "value": "channels",
+                },
+                {
+                    "type": "button",
+                    "action_id": "configure_approval_rules",
+                    "text": {"type": "plain_text", "text": t("configure_rules")},
+                    "value": "rules",
+                },
+                {
+                    "type": "button",
+                    "action_id": "configure_access_roles",
+                    "text": {"type": "plain_text", "text": t("manage_roles")},
+                    "value": "roles",
+                },
+            ],
+        }
+    )
     return {
         "type": "modal",
         "callback_id": "administration_menu",
         "title": {"type": "plain_text", "text": t("administration_title")},
         "close": {"type": "plain_text", "text": t("close")},
+        "blocks": blocks,
+    }
+
+
+def system_channels_modal(configuration: dict) -> dict:
+    def conversation_select(action_id: str, placeholder_key: str, initial: str | None) -> dict:
+        element: dict = {
+            "type": "conversations_select",
+            "action_id": action_id,
+            "placeholder": {"type": "plain_text", "text": t(placeholder_key)},
+            "filter": {
+                "include": ["private"],
+                "exclude_external_shared_channels": True,
+                "exclude_bot_users": True,
+            },
+        }
+        if initial:
+            element["initial_conversation"] = initial
+        return element
+
+    additional = configuration.get("additional_operating_channel_ids", [])
+    additional_element: dict = {
+        "type": "multi_conversations_select",
+        "action_id": "value",
+        "placeholder": {"type": "plain_text", "text": t("additional_operating_channels")},
+        "filter": {
+            "include": ["private"],
+            "exclude_external_shared_channels": True,
+            "exclude_bot_users": True,
+        },
+    }
+    if additional:
+        additional_element["initial_conversations"] = additional
+    return {
+        "type": "modal",
+        "callback_id": "system_channels_editor",
+        "title": {"type": "plain_text", "text": t("system_channels_title")},
+        "submit": {"type": "plain_text", "text": t("save")},
+        "close": {"type": "plain_text", "text": t("cancel")},
         "blocks": [
             {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": t("admin_menu_notice")},
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": t("system_channels_notice")}],
             },
             {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": "configure_approval_rules",
-                        "style": "primary",
-                        "text": {"type": "plain_text", "text": t("configure_rules")},
-                        "value": "rules",
-                    },
-                    {
-                        "type": "button",
-                        "action_id": "configure_access_roles",
-                        "text": {"type": "plain_text", "text": t("manage_roles")},
-                        "value": "roles",
-                    },
-                ],
+                "type": "input",
+                "block_id": "audit_channel",
+                "label": {"type": "plain_text", "text": t("audit_channel")},
+                "element": conversation_select(
+                    "value", "audit_channel", configuration.get("audit_channel_id")
+                ),
+            },
+            {
+                "type": "input",
+                "block_id": "alerts_channel",
+                "label": {"type": "plain_text", "text": t("alerts_channel")},
+                "element": conversation_select(
+                    "value", "alerts_channel", configuration.get("alerts_channel_id")
+                ),
+            },
+            {
+                "type": "input",
+                "block_id": "additional_operating_channels",
+                "optional": True,
+                "label": {
+                    "type": "plain_text",
+                    "text": t("additional_operating_channels"),
+                },
+                "element": additional_element,
             },
         ],
     }
@@ -575,9 +661,7 @@ def approval_rule_editor_modal(
     }
 
 
-def role_configuration_modal(
-    assignments: dict[str, dict[str, set[str]]], departments: Iterable[Department]
-) -> dict:
+def role_configuration_modal(assignments: dict[str, dict[str, set[str]]]) -> dict:
     blocks: list[dict] = [
         {
             "type": "context",
@@ -585,8 +669,10 @@ def role_configuration_modal(
         }
     ]
 
-    def append_role_field(scope: str, role: RoleDefinitionSeed) -> None:
-        selected = sorted(assignments.get(scope, empty_role_set()).get(role.id, set()))
+    def append_role_field(role: RoleDefinitionSeed) -> None:
+        selected = sorted(
+            assignments.get(WORKSPACE_ROLE_SCOPE, empty_role_set()).get(role.id, set())
+        )
         label = display_name(role.name_en, role.name_ko)
         element: dict = {
             "type": "multi_users_select",
@@ -598,7 +684,7 @@ def role_configuration_modal(
         blocks.append(
             {
                 "type": "input",
-                "block_id": f"access_role__{scope}__{role.id}",
+                "block_id": f"access_role__{WORKSPACE_ROLE_SCOPE}__{role.id}",
                 "optional": not role.required,
                 "label": {"type": "plain_text", "text": label},
                 "element": element,
@@ -611,23 +697,8 @@ def role_configuration_modal(
             "text": {"type": "plain_text", "text": t("workspace_roles")},
         }
     )
-    for role in role_definitions(department_scoped=False):
-        append_role_field(WORKSPACE_ROLE_SCOPE, role)
-    for department in departments:
-        blocks.extend(
-            [
-                {"type": "divider"},
-                {
-                    "type": "header",
-                    "text": {
-                        "type": "plain_text",
-                        "text": display_name(department.name_en, department.name_ko)[:150],
-                    },
-                },
-            ]
-        )
-        for role in role_definitions(department_scoped=True):
-            append_role_field(department.id, role)
+    for role in role_definitions():
+        append_role_field(role)
     return {
         "type": "modal",
         "callback_id": "access_roles_editor",

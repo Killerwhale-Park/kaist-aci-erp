@@ -1,7 +1,6 @@
 from app.config.roles import (
     ADMIN_STAFF_ROLE,
     PROFESSOR_ROLE,
-    REQUESTER_ROLE,
     SYSTEM_ADMIN_ROLE,
     empty_role_set,
 )
@@ -17,6 +16,7 @@ from app.slack.modals import (
     expense_context_modal,
     expense_details_modal,
     role_configuration_modal,
+    system_channels_modal,
 )
 
 
@@ -175,21 +175,31 @@ def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
     )
     roles = role_configuration_modal(
         {
-            "workspace": {SYSTEM_ADMIN_ROLE: {"U_ADMIN_A", "U_ADMIN_B"}},
-            "department_1": {
-                REQUESTER_ROLE: {"U_REQUESTER"},
+            "workspace": {
+                SYSTEM_ADMIN_ROLE: {"U_ADMIN_A", "U_ADMIN_B"},
                 PROFESSOR_ROLE: {"U_PROFESSOR_A", "U_PROFESSOR_B"},
                 ADMIN_STAFF_ROLE: {"U_STAFF"},
             },
-        },
-        [Department("department_1", "AI Computing", "AI Computing")],
+        }
+    )
+    channels = system_channels_modal(
+        {
+            "audit_channel_id": "C_AUDIT",
+            "alerts_channel_id": "C_ALERTS",
+            "additional_operating_channel_ids": ["C_WORK"],
+        }
     )
 
     editor_elements = [block.get("element") for block in editor["blocks"] if block.get("element")]
     assert any(element["type"] == "conversations_select" for element in editor_elements)
     role_inputs = [block for block in roles["blocks"] if block["type"] == "input"]
-    assert len(role_inputs) == 5
+    assert len(role_inputs) == 4
     assert all(block["element"]["type"] == "multi_users_select" for block in role_inputs)
+    assert [block["element"]["type"] for block in channels["blocks"] if "element" in block] == [
+        "conversations_select",
+        "conversations_select",
+        "multi_conversations_select",
+    ]
     assert len(editor["blocks"]) <= 100
 
 
@@ -216,7 +226,8 @@ def test_every_modal_with_input_blocks_has_a_submit_button() -> None:
                 }
             ],
         ),
-        role_configuration_modal({"workspace": empty_role_set()}, [department]),
+        role_configuration_modal({"workspace": empty_role_set()}),
+        system_channels_modal({}),
     ]
     for view in views:
         if any(block.get("type") == "input" for block in view["blocks"]):
