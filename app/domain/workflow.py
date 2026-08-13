@@ -122,6 +122,9 @@ def created_event_data(
         },
         "category": {
             "id": category.id,
+            "form_id": category.form_id,
+            "form_name_en": category.form_name_en,
+            "form_name_ko": category.form_name_ko,
             "name_en": category.name_en,
             "name_ko": category.name_ko,
             "budget_path_en": list(category.budget_path_en),
@@ -160,6 +163,9 @@ def request_from_created(data: dict[str, Any]) -> ExpenseRequest:
     category = ExpenseCategory(
         id=category_data["id"],
         budget_program_id=budget.id,
+        form_id=category_data.get("form_id", category_data["id"]),
+        form_name_en=category_data.get("form_name_en", category_data["name_en"]),
+        form_name_ko=category_data.get("form_name_ko", category_data["name_ko"]),
         name_en=category_data["name_en"],
         name_ko=category_data["name_ko"],
         budget_path_en=tuple(

@@ -31,8 +31,9 @@ def test_context_and_dynamic_evidence_modal_use_block_kit_limits() -> None:
                 "Academic Development Fund",
                 "학사계발비",
             ),
-            BudgetNode("supplies", "academic_development", "Supplies", "비품비", "supplies"),
+            BudgetNode("supplies", "academic_development", "Supplies", "비품비"),
         ],
+        category_node_ids={"supplies"},
         selected_budget_node_ids=(
             "department_budget",
             "academic_development",
@@ -92,20 +93,25 @@ def test_budget_depth_and_applicant_identifier_are_dynamic() -> None:
         BudgetNode("l2", "l1", "Level 2", "2단계"),
         BudgetNode("l3", "l2", "Level 3", "3단계"),
         BudgetNode("l4", "l3", "Level 4", "4단계"),
-        BudgetNode("l5", "l4", "Leaf", "최종 항목", "leaf_category"),
+        BudgetNode("l5", "l4", "Leaf", "최종 항목"),
     ]
     incomplete = expense_context_modal(
-        "U_USER", [department], nodes, selected_budget_node_ids=("l1",)
+        "U_USER",
+        [department],
+        nodes,
+        category_node_ids={"l5"},
+        selected_budget_node_ids=("l1",),
     )
     professor = expense_context_modal(
         "U_USER",
         [department],
         nodes,
+        category_node_ids={"l5"},
         selected_budget_node_ids=("l1", "l2", "l3", "l4", "l5"),
         applicant_type=ApplicantType.PROFESSOR,
     )
 
-    assert "submit" not in incomplete
+    assert "submit" in incomplete
     assert "submit" in professor
     assert (
         len(
@@ -122,12 +128,13 @@ def test_budget_depth_and_applicant_identifier_are_dynamic() -> None:
 
     two_level_nodes = [
         BudgetNode("root", None, "Root", "상위"),
-        BudgetNode("leaf", "root", "Leaf", "최종", "leaf_category"),
+        BudgetNode("leaf", "root", "Leaf", "최종"),
     ]
     two_level = expense_context_modal(
         "U_USER",
         [department],
         two_level_nodes,
+        category_node_ids={"leaf"},
         selected_budget_node_ids=("root", "leaf"),
     )
     assert (
@@ -162,3 +169,30 @@ def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
     assert any(element["type"] == "multi_users_select" for element in editor_elements)
     assert admins["blocks"][0]["element"]["type"] == "multi_users_select"
     assert len(editor["blocks"]) <= 100
+
+
+def test_every_modal_with_input_blocks_has_a_submit_button() -> None:
+    department = Department("department_1", "AI Computing", "AI Computing")
+    views = [
+        expense_context_modal(
+            "U_USER",
+            [department],
+            [BudgetNode("root", None, "Root", "상위")],
+        ),
+        approval_rule_editor_modal(
+            "department_1",
+            "supplies",
+            None,
+            [
+                {
+                    "name_en": "Approval",
+                    "name_ko": "승인",
+                    "approver_slack_user_ids": [],
+                }
+            ],
+        ),
+        system_admins_modal([]),
+    ]
+    for view in views:
+        if any(block.get("type") == "input" for block in view["blocks"]):
+            assert view.get("submit"), view["callback_id"]

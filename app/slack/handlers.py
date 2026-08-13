@@ -97,11 +97,12 @@ def register_handlers(slack_app, settings: Settings) -> None:
             slack_user_id,
             departments(),
             budget_nodes(),
+            category_node_ids=(item.id for item in categories()),
             initial_department_id=initial_department_id,
             source_work_request_id=source_work_request_id,
             selected_budget_node_ids=selected_budget_node_ids,
         )
-        await client.views_open(trigger_id=trigger_id, view=view)
+        await safe_open_modal(client, trigger_id, view, slack_user_id)
 
     async def publish_home(client, slack_user_id: str) -> None:
         ledger = repository(client)
@@ -144,6 +145,15 @@ def register_handlers(slack_app, settings: Settings) -> None:
             await client.chat_postMessage(channel=slack_user_id, text=text, blocks=blocks)
         except SlackApiError:
             logger.exception("Failed to send Slack DM to %s", slack_user_id)
+
+    async def safe_open_modal(client, trigger_id: str, view: dict, slack_user_id: str) -> bool:
+        try:
+            await client.views_open(trigger_id=trigger_id, view=view)
+            return True
+        except SlackApiError:
+            logger.exception("Slack rejected modal %s", view.get("callback_id"))
+            await safe_dm(client, slack_user_id, t("form_open_error"))
+            return False
 
     async def send_ephemeral(client, body: dict, text: str, respond=None) -> None:
         try:
@@ -275,6 +285,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             body["user"]["id"],
             departments(),
             budget_nodes(),
+            category_node_ids=(item.id for item in categories()),
             initial_department_id=state_value(state, "department"),
             source_work_request_id=metadata.get("source_work_request_id"),
             selected_budget_node_ids=(
@@ -422,7 +433,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
             view = post_evidence_modal(request)
         else:
             view = request_details_modal(request)
-        await client.views_open(trigger_id=trigger_id, view=view)
+        await safe_open_modal(client, trigger_id, view, actor)
 
     @slack_app.command("/expense")
     async def expense_command(ack, body, client):
@@ -451,8 +462,11 @@ def register_handlers(slack_app, settings: Settings) -> None:
     @slack_app.action("new_purchase_work_request")
     async def new_purchase_work_request(ack, body, client):
         await ack()
-        await client.views_open(
-            trigger_id=body["trigger_id"], view=purchase_request_modal(departments())
+        await safe_open_modal(
+            client,
+            body["trigger_id"],
+            purchase_request_modal(departments()),
+            body["user"]["id"],
         )
 
     @slack_app.action("new_settlement_work_request")
@@ -464,8 +478,11 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except ApprovalPermissionError:
             await safe_dm(client, actor, t("unauthorized"))
             return
-        await client.views_open(
-            trigger_id=body["trigger_id"], view=settlement_request_modal(departments())
+        await safe_open_modal(
+            client,
+            body["trigger_id"],
+            settlement_request_modal(departments()),
+            actor,
         )
 
     @slack_app.view("purchase_request_create")
@@ -703,7 +720,6 @@ def register_handlers(slack_app, settings: Settings) -> None:
         )
         if (
             leaf is None
-            or not leaf.is_expense_category
             or category is None
             or budget is None
             or category.budget_program_id != budget.id
@@ -856,9 +872,11 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except (ApprovalPermissionError, InvalidStateTransitionError):
             await send_ephemeral(client, body, t("unauthorized"), respond)
             return
-        await client.views_open(
-            trigger_id=body["trigger_id"],
-            view=approval_decision_modal(request_id, decision),
+        await safe_open_modal(
+            client,
+            body["trigger_id"],
+            approval_decision_modal(request_id, decision),
+            actor,
         )
 
     @slack_app.action("request_changes")
@@ -997,7 +1015,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except ApprovalPermissionError:
             await safe_dm(client, actor, t("unauthorized"))
             return
-        await client.views_open(trigger_id=body["trigger_id"], view=administration_modal())
+        await safe_open_modal(client, body["trigger_id"], administration_modal(), actor)
 
     @slack_app.action("configure_approval_rules")
     async def configure_approval_rules_action(ack, body, client):

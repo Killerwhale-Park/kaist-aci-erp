@@ -16,18 +16,18 @@ class EvidenceSeed:
 
 
 @dataclass(frozen=True)
-class CategorySeed:
+class ExpenseFormSeed:
     id: str
     name_en: str
     name_ko: str
     evidence: tuple[EvidenceSeed, ...]
 
 
-CATEGORY_SEEDS = [
-    CategorySeed(
-        id="supplies",
-        name_en="Supplies",
-        name_ko="비품비",
+EXPENSE_FORM_SEEDS = [
+    ExpenseFormSeed(
+        id="supplies_settlement",
+        name_en="Supplies Settlement Form",
+        name_ko="비품비 정산 양식",
         evidence=(
             EvidenceSeed("card_receipt", "Card Receipt", "카드 영수증", EvidenceTiming.PRE),
             EvidenceSeed("item_photo", "Item Photo", "물품 사진", EvidenceTiming.PRE),

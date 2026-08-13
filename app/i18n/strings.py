@@ -65,6 +65,7 @@ STRINGS = {
     "budget": "Budget / 예산",
     "budget_level": "Budget Level {level} / 예산 분류 {level}",
     "expense_category": "Expense Category / 지출 항목",
+    "form": "Form / 양식",
     "amount": "Amount / 금액",
     "vendor": "Vendor / 사용처",
     "payment_date": "Payment Date / 결제일",
@@ -188,6 +189,10 @@ STRINGS = {
     "submission_error": (
         "The request could not be saved. Please try again or contact an administrator.\n"
         "신청을 저장하지 못했습니다. 다시 시도하거나 관리자에게 문의해주세요."
+    ),
+    "form_open_error": (
+        "Slack could not open the form. Please try again.\n"
+        "Slack이 양식을 열지 못했습니다. 다시 시도해주세요."
     ),
     "details_title": "Expense Details / 상세",
     "post_title": "Post Evidence / 사후 증빙",

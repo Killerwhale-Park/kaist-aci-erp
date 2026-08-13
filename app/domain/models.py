@@ -40,11 +40,20 @@ class BudgetNode:
     parent_id: str | None
     name_en: str
     name_ko: str
-    expense_category_id: str | None = None
 
-    @property
-    def is_expense_category(self) -> bool:
-        return self.expense_category_id is not None
+
+@dataclass(frozen=True)
+class ExpenseForm:
+    id: str
+    name_en: str
+    name_ko: str
+    evidence_requirements: tuple[EvidenceRequirementDefinition, ...] = ()
+
+
+@dataclass(frozen=True)
+class BudgetFormMapping:
+    budget_node_id: str
+    form_id: str
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,9 @@ class EvidenceRequirementDefinition:
 class ExpenseCategory:
     id: str
     budget_program_id: str
+    form_id: str
+    form_name_en: str
+    form_name_ko: str
     name_en: str
     name_ko: str
     evidence_requirements: tuple[EvidenceRequirementDefinition, ...] = ()

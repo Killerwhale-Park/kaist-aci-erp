@@ -57,6 +57,10 @@ def request_message_blocks(request: ExpenseRequest, *, include_actions: bool = T
     category_name = display_name(
         escape_mrkdwn(request.category.name_en), escape_mrkdwn(request.category.name_ko)
     )
+    form_name = display_name(
+        escape_mrkdwn(request.category.form_name_en),
+        escape_mrkdwn(request.category.form_name_ko),
+    )
     blocks: list[dict] = [
         {
             "type": "header",
@@ -87,6 +91,10 @@ def request_message_blocks(request: ExpenseRequest, *, include_actions: bool = T
                 {
                     "type": "mrkdwn",
                     "text": f"*{t('category')}*\n{category_name}",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*{t('form')}*\n{form_name}",
                 },
                 {
                     "type": "mrkdwn",

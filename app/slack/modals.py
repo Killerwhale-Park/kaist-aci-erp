@@ -27,13 +27,20 @@ def _category_option(category: ExpenseCategory) -> dict:
     name_en = " / ".join(category.budget_path_en) or category.name_en
     name_ko = " / ".join(category.budget_path_ko) or category.name_ko
     return {
-        "text": {"type": "plain_text", "text": f"{name_ko} / {name_en}"[:75]},
+        "text": {
+            "type": "plain_text",
+            "text": (f"{name_ko} → {category.form_name_ko} / {name_en} → {category.form_name_en}")[
+                :75
+            ],
+        },
         "value": category.id,
     }
 
 
 def _budget_selection_blocks(
-    nodes: Iterable[BudgetNode], selected_node_ids: tuple[str, ...]
+    nodes: Iterable[BudgetNode],
+    category_node_ids: set[str],
+    selected_node_ids: tuple[str, ...],
 ) -> tuple[list[dict], BudgetNode | None]:
     node_list = list(nodes)
     by_parent: dict[str | None, list[BudgetNode]] = {}
@@ -60,7 +67,7 @@ def _budget_selection_blocks(
         )
         if initial_option:
             element["initial_option"] = initial_option
-        is_category_level = all(item.is_expense_category for item in choices)
+        is_category_level = all(item.id in category_node_ids for item in choices)
         blocks.append(
             {
                 "type": "input",
@@ -79,7 +86,7 @@ def _budget_selection_blocks(
         )
         if selected is None:
             break
-        if selected.is_expense_category:
+        if selected.id in category_node_ids:
             selected_leaf = selected
             break
         parent_id = selected.id
@@ -90,6 +97,7 @@ def expense_context_modal(
     slack_user_id: str,
     departments: Iterable[Department],
     budget_nodes: Iterable[BudgetNode],
+    category_node_ids: Iterable[str] = (),
     initial_department_id: str | None = None,
     source_work_request_id: str | None = None,
     selected_budget_node_ids: tuple[str, ...] = (),
@@ -118,7 +126,9 @@ def expense_context_modal(
             item for item in applicant_options if item["value"] == applicant_type.value
         ),
     }
-    budget_blocks, selected_leaf = _budget_selection_blocks(budget_nodes, selected_budget_node_ids)
+    budget_blocks, _selected_leaf = _budget_selection_blocks(
+        budget_nodes, set(category_node_ids), selected_budget_node_ids
+    )
     identifier_block_id = (
         "student_number" if applicant_type == ApplicantType.STUDENT else "employee_number"
     )
@@ -129,6 +139,7 @@ def expense_context_modal(
             {"source_work_request_id": source_work_request_id} if source_work_request_id else {}
         ),
         "title": {"type": "plain_text", "text": t("new_request_short")},
+        "submit": {"type": "plain_text", "text": t("continue")},
         "close": {"type": "plain_text", "text": t("cancel")},
         "blocks": [
             {
@@ -167,8 +178,6 @@ def expense_context_modal(
             *budget_blocks,
         ],
     }
-    if selected_leaf is not None:
-        view["submit"] = {"type": "plain_text", "text": t("continue")}
     return view
 
 

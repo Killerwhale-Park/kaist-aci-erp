@@ -1,15 +1,18 @@
-from app.config.budgets import BUDGET_NODE_SEEDS, BUDGET_SEEDS
-from app.config.categories import CATEGORY_SEEDS
+from app.config.budgets import BUDGET_NODE_SEEDS
 from app.config.departments import department_seeds
+from app.config.form_mappings import BUDGET_FORM_MAPPING_SEEDS
+from app.config.forms import EXPENSE_FORM_SEEDS
 from app.config.workflows import workflow_rule_seeds
 from app.domain.models import (
     ApprovalRule,
     ApprovalRuleStep,
+    BudgetFormMapping,
     BudgetNode,
     BudgetProgram,
     Department,
     EvidenceRequirementDefinition,
     ExpenseCategory,
+    ExpenseForm,
 )
 
 
@@ -30,9 +33,10 @@ def budgets() -> list[BudgetProgram]:
             id=item.id,
             name_en=item.name_en,
             name_ko=item.name_ko,
-            is_available=item.is_available,
+            is_available=True,
         )
-        for item in BUDGET_SEEDS
+        for item in budget_nodes()
+        if item.parent_id is None
     ]
 
 
@@ -43,7 +47,6 @@ def budget_nodes() -> list[BudgetNode]:
             parent_id=item.parent_id,
             name_en=item.name_en,
             name_ko=item.name_ko,
-            expense_category_id=item.expense_category_id,
         )
         for item in BUDGET_NODE_SEEDS
     ]
@@ -57,8 +60,8 @@ def budget_children(parent_id: str | None) -> list[BudgetNode]:
     return [item for item in budget_nodes() if item.parent_id == parent_id]
 
 
-def budget_path(node_id: str) -> tuple[BudgetNode, ...]:
-    nodes_by_id = {item.id: item for item in budget_nodes()}
+def budget_path_from_nodes(nodes: list[BudgetNode], node_id: str) -> tuple[BudgetNode, ...]:
+    nodes_by_id = {item.id: item for item in nodes}
     path: list[BudgetNode] = []
     seen: set[str] = set()
     current = nodes_by_id.get(node_id)
@@ -72,20 +75,17 @@ def budget_path(node_id: str) -> tuple[BudgetNode, ...]:
     return tuple(path)
 
 
-def categories() -> list[ExpenseCategory]:
-    result: list[ExpenseCategory] = []
-    for category in CATEGORY_SEEDS:
-        leaf = next(
-            (item for item in budget_nodes() if item.expense_category_id == category.id),
-            None,
-        )
-        path = budget_path(leaf.id) if leaf else ()
-        if not path:
-            raise ValueError(f"Expense category has no budget path: {category.id}")
+def budget_path(node_id: str) -> tuple[BudgetNode, ...]:
+    return budget_path_from_nodes(budget_nodes(), node_id)
+
+
+def expense_forms() -> list[ExpenseForm]:
+    result: list[ExpenseForm] = []
+    for form in EXPENSE_FORM_SEEDS:
         requirements = tuple(
             EvidenceRequirementDefinition(
-                id=f"{category.id}.{item.key}",
-                category_id=category.id,
+                id=f"{form.id}.{item.key}",
+                category_id=form.id,
                 evidence_key=item.key,
                 name_en=item.name_en,
                 name_ko=item.name_ko,
@@ -96,20 +96,84 @@ def categories() -> list[ExpenseCategory]:
                 description_ko=item.description_ko,
                 display_order=index,
             )
-            for index, item in enumerate(category.evidence, start=1)
+            for index, item in enumerate(form.evidence, start=1)
         )
         result.append(
-            ExpenseCategory(
-                id=category.id,
-                budget_program_id=path[0].id,
-                name_en=category.name_en,
-                name_ko=category.name_ko,
+            ExpenseForm(
+                id=form.id,
+                name_en=form.name_en,
+                name_ko=form.name_ko,
                 evidence_requirements=requirements,
+            )
+        )
+    return result
+
+
+def budget_form_mappings() -> list[BudgetFormMapping]:
+    return [
+        BudgetFormMapping(
+            budget_node_id=item.budget_node_id,
+            form_id=item.form_id,
+        )
+        for item in BUDGET_FORM_MAPPING_SEEDS
+    ]
+
+
+def resolve_expense_categories(
+    nodes: list[BudgetNode],
+    forms: list[ExpenseForm],
+    mappings: list[BudgetFormMapping],
+) -> list[ExpenseCategory]:
+    node_by_id = {item.id: item for item in nodes}
+    form_by_id = {item.id: item for item in forms}
+    configured_node_ids = {item.budget_node_id for item in mappings}
+    if len(configured_node_ids) != len(mappings):
+        raise ValueError("A budget node can map to only one expense form")
+
+    result: list[ExpenseCategory] = []
+    for mapping in mappings:
+        node = node_by_id.get(mapping.budget_node_id)
+        form = form_by_id.get(mapping.form_id)
+        if node is None or form is None:
+            raise ValueError("Budget form mapping references unavailable configuration")
+        if any(item.parent_id == node.id for item in nodes):
+            raise ValueError("Only a leaf budget node can map to an expense form")
+        path = budget_path_from_nodes(nodes, node.id)
+        result.append(
+            ExpenseCategory(
+                id=node.id,
+                budget_program_id=path[0].id,
+                form_id=form.id,
+                form_name_en=form.name_en,
+                form_name_ko=form.name_ko,
+                name_en=node.name_en,
+                name_ko=node.name_ko,
+                evidence_requirements=tuple(
+                    EvidenceRequirementDefinition(
+                        id=item.id,
+                        category_id=node.id,
+                        evidence_key=item.evidence_key,
+                        name_en=item.name_en,
+                        name_ko=item.name_ko,
+                        timing=item.timing,
+                        requirement=item.requirement,
+                        display_order=item.display_order,
+                        allow_waiver=item.allow_waiver,
+                        description_en=item.description_en,
+                        description_ko=item.description_ko,
+                        is_active=item.is_active,
+                    )
+                    for item in form.evidence_requirements
+                ),
                 budget_path_en=tuple(item.name_en for item in path),
                 budget_path_ko=tuple(item.name_ko for item in path),
             )
         )
     return result
+
+
+def categories() -> list[ExpenseCategory]:
+    return resolve_expense_categories(budget_nodes(), expense_forms(), budget_form_mappings())
 
 
 def department_by_id(department_id: str) -> Department | None:
@@ -125,10 +189,7 @@ def category_by_id(category_id: str) -> ExpenseCategory | None:
 
 
 def category_for_budget_node(node_id: str) -> ExpenseCategory | None:
-    node = budget_node_by_id(node_id)
-    if node is None or node.expense_category_id is None:
-        return None
-    return category_by_id(node.expense_category_id)
+    return category_by_id(node_id)
 
 
 def default_rule(department_id: str, category_id: str) -> ApprovalRule | None:

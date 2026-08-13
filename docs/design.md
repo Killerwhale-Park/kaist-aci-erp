@@ -73,7 +73,7 @@ final approval -> required POST evidence -> COMPLETED
 
 ## Budget configuration tree
 
-예산 분류도 단계 수를 미리 알지 않습니다. 각 노드는 `parent_id`로 상위 노드를 가리키며, 실제 정산 가능한 leaf만 Expense Category와 증빙 설정에 연결됩니다.
+예산 분류도 단계 수를 미리 알지 않습니다. 각 `BudgetNode`는 `parent_id`로 상위 노드를 가리킵니다. 증빙·입력 규칙은 별도 `ExpenseForm` 엔티티이며 `BudgetFormMapping`이 실제 정산 가능한 leaf와 양식을 연결합니다.
 
 ```text
 학과예산 / Department Budget
@@ -81,7 +81,9 @@ final approval -> required POST evidence -> COMPLETED
    └─ 비품비 / Supplies
 ```
 
-Slack 모달은 선택한 노드의 자식만 다음 selector로 추가합니다. leaf에 도달하기 전에는 제출 버튼을 표시하지 않으므로 2~N단계 분류를 같은 UI와 엔진으로 처리합니다.
+Slack 모달은 선택한 노드의 자식만 다음 selector로 추가합니다. leaf에 도달하기 전에 계속을 누르면 최종 항목을 선택하라는 검증 오류를 표시하므로 2~N단계 분류를 같은 UI와 엔진으로 처리합니다.
+
+`BudgetNode`와 `ExpenseForm`은 독립적인 축입니다. 같은 이름의 항목도 재원 경로별로 서로 다른 node ID를 가지므로 각기 다른 양식에 연결할 수 있습니다. 반대로 하나의 양식을 여러 재원 leaf가 재사용할 수도 있습니다. `ExpenseCategory`는 저장되는 별도 설정 엔티티가 아니라 이 mapping을 Slack workflow가 소비할 수 있게 풀어낸 projection입니다.
 
 ## Query and configuration
 
