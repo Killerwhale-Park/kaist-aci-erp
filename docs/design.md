@@ -71,6 +71,18 @@ final approval -> required POST evidence -> COMPLETED
 
 엔진은 단계 수를 미리 알지 않습니다. 각 단계에서는 설정된 승인자 중 한 명이 승인할 수 있습니다. 권한은 Slack interaction의 actor ID와 신청 당시 workflow snapshot을 비교해 검사합니다.
 
+## Budget configuration tree
+
+예산 분류도 단계 수를 미리 알지 않습니다. 각 노드는 `parent_id`로 상위 노드를 가리키며, 실제 정산 가능한 leaf만 Expense Category와 증빙 설정에 연결됩니다.
+
+```text
+학과예산 / Department Budget
+└─ 학사계발비 / Academic Development Fund
+   └─ 비품비 / Supplies
+```
+
+Slack 모달은 선택한 노드의 자식만 다음 selector로 추가합니다. leaf에 도달하기 전에는 제출 버튼을 표시하지 않으므로 2~N단계 분류를 같은 UI와 엔진으로 처리합니다.
+
 ## Query and configuration
 
 App Home 조회 시 root metadata를 먼저 필터링합니다. 신청자 또는 현재 승인자가 일치하는 메시지만 thread를 replay합니다.

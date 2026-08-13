@@ -11,8 +11,8 @@ async def test_rule_and_administrators_are_stored_in_slack_messages(
     slack_client, settings: Settings
 ) -> None:
     ledger = SlackLedgerRepository(slack_client, settings)
-    initial = await ledger.get_rule("department_1", "airfare")
-    assert initial == default_rule("department_1", "airfare")
+    initial = await ledger.get_rule("department_1", "supplies")
+    assert initial == default_rule("department_1", "supplies")
     assert not initial.is_complete
 
     saved = await ledger.save_rule(
@@ -20,7 +20,7 @@ async def test_rule_and_administrators_are_stored_in_slack_messages(
         ApprovalRule(
             department_id="department_1",
             budget_program_id="department_budget",
-            category_id="airfare",
+            category_id="supplies",
             approval_channel_id="C_APPROVAL",
             steps=(
                 ApprovalRuleStep("Professor", "교수", ("U_PROF", "U_PROF_2")),
@@ -28,7 +28,7 @@ async def test_rule_and_administrators_are_stored_in_slack_messages(
             ),
         ),
     )
-    loaded = await ledger.get_rule("department_1", "airfare")
+    loaded = await ledger.get_rule("department_1", "supplies")
     assert loaded == saved
     assert loaded.version == 1
     assert loaded.is_complete

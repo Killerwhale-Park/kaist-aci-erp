@@ -8,6 +8,8 @@ class UserRole(StrEnum):
 
 class ApplicantType(StrEnum):
     STUDENT = "STUDENT"
+    PROFESSOR = "PROFESSOR"
+    # Kept only for replaying records created before applicant types were clarified.
     OTHER = "OTHER"
 
 

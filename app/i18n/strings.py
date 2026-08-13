@@ -57,9 +57,13 @@ STRINGS = {
     "department": "Department / 학과",
     "applicant_type": "Applicant Type / 신청자 구분",
     "student": "Student / 학생",
+    "professor": "Professor / 교수",
     "other": "Other / 기타",
     "student_id": "Student ID / 학번",
+    "employee_id": "Employee ID / 사번",
+    "applicant_identifier": "Identifier / 식별번호",
     "budget": "Budget / 예산",
+    "budget_level": "Budget Level {level} / 예산 분류 {level}",
     "expense_category": "Expense Category / 지출 항목",
     "amount": "Amount / 금액",
     "vendor": "Vendor / 사용처",
@@ -92,8 +96,8 @@ STRINGS = {
     "system_administration": "System Administration / 시스템 관리",
     "administration_title": "Administration / 관리",
     "configuration_seed_notice": (
-        "Approval rules and departments are managed in database configuration for this MVP.\n"
-        "이 MVP에서는 승인 규칙과 학과를 DB 설정으로 관리합니다."
+        "Approval rules are stored in the selected private Slack channel.\n"
+        "승인 규칙은 선택한 비공개 Slack 채널에 저장됩니다."
     ),
     "manage_rules": "Manage Rules / 규칙 관리",
     "manage_admins": "Manage Admins / 관리자 설정",
@@ -203,8 +207,15 @@ STRINGS = {
         "No valid approval configuration exists for this selection.\n"
         "선택한 항목에 유효한 승인 설정이 없습니다."
     ),
+    "approval_configuration_required": (
+        "No approval rule. Admin: App Home → System Administration → Approval Rules.\n"
+        "승인 규칙이 없습니다. 관리자가 App Home → 시스템 관리 → 승인 규칙에서 설정해주세요."
+    ),
     "validation_error": "Please review the entered values. / 입력값을 확인해주세요.",
     "student_id_required": "Student ID is required for students. / 학생은 학번을 입력해야 합니다.",
+    "employee_id_required": (
+        "Employee ID is required for professors. / 교수는 사번을 입력해야 합니다."
+    ),
     "https_required": "Enter a valid HTTPS URL. / 올바른 HTTPS URL을 입력해주세요.",
     "amount_invalid": "Enter an amount greater than zero. / 0보다 큰 금액을 입력해주세요.",
     "reason_required": "Reason is required. / 사유를 입력해주세요.",

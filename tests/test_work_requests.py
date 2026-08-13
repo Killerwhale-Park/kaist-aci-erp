@@ -112,7 +112,9 @@ def test_work_request_modals_and_department_prefill() -> None:
     department = department_by_id("department_3")
     purchase = purchase_request_modal([department])
     settlement = settlement_request_modal([department])
-    expense = expense_context_modal("U_STUDENT", [department], [], [], "department_3")
+    expense = expense_context_modal(
+        "U_STUDENT", [department], [], initial_department_id="department_3"
+    )
 
     assert purchase["callback_id"] == "purchase_request_create"
     assert settlement["callback_id"] == "settlement_request_create"

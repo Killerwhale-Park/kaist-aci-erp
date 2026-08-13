@@ -108,7 +108,7 @@ def created_event_data(
         "applicant_slack_user_id": command.applicant_slack_user_id,
         "applicant_display_name": command.applicant_display_name,
         "applicant_type": command.applicant_type.value,
-        "student_id": command.student_id,
+        "applicant_identifier": command.applicant_identifier,
         "department": {
             "id": department.id,
             "name_en": department.name_en,
@@ -124,6 +124,8 @@ def created_event_data(
             "id": category.id,
             "name_en": category.name_en,
             "name_ko": category.name_ko,
+            "budget_path_en": list(category.budget_path_en),
+            "budget_path_ko": list(category.budget_path_ko),
         },
         "amount": str(command.amount),
         "currency": command.currency,
@@ -160,6 +162,12 @@ def request_from_created(data: dict[str, Any]) -> ExpenseRequest:
         budget_program_id=budget.id,
         name_en=category_data["name_en"],
         name_ko=category_data["name_ko"],
+        budget_path_en=tuple(
+            category_data.get("budget_path_en") or [budget.name_en, category_data["name_en"]]
+        ),
+        budget_path_ko=tuple(
+            category_data.get("budget_path_ko") or [budget.name_ko, category_data["name_ko"]]
+        ),
     )
     evidence = [
         EvidenceSubmission(
@@ -210,7 +218,7 @@ def request_from_created(data: dict[str, Any]) -> ExpenseRequest:
         applicant_slack_user_id=data["applicant_slack_user_id"],
         applicant_display_name=data["applicant_display_name"],
         applicant_type=ApplicantType(data["applicant_type"]),
-        student_id=data.get("student_id"),
+        applicant_identifier=data.get("applicant_identifier") or data.get("student_id"),
         department_id=department.id,
         budget_program_id=budget.id,
         category_id=category.id,

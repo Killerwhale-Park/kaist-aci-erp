@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
 from app.domain.catalog import budget_by_id, category_by_id, department_by_id
 from app.domain.enums import ApprovalStepStatus, RequestStatus
@@ -34,7 +35,7 @@ def make_rule(step_count: int, *, approvers: dict[int, tuple[str, ...]] | None =
     return ApprovalRule(
         department_id="department_1",
         budget_program_id="department_budget",
-        category_id="airfare",
+        category_id="supplies",
         approval_channel_id="C_APPROVAL",
         steps=tuple(
             ApprovalRuleStep(
@@ -58,10 +59,10 @@ def make_created(
         applicant_slack_user_id="U_STUDENT",
         applicant_display_name="Student",
         applicant_type="STUDENT",
-        student_id="20260001",
+        applicant_identifier="20260001",
         department_id="department_1",
         budget_program_id="department_budget",
-        category_id="airfare",
+        category_id="supplies",
         amount=Decimal("120000"),
         vendor="Airline",
         payment_date=date(2026, 8, 13),
@@ -74,7 +75,7 @@ def make_created(
         make_rule(step_count, approvers=approvers),
         department=department_by_id("department_1"),
         budget=budget_by_id("department_budget"),
-        category=category_by_id("airfare"),
+        category=category_by_id("supplies"),
         request_id="REQ-1",
         reference_number="EXP-TEST-1",
     )
@@ -135,15 +136,14 @@ def test_reject_and_changes_requested_transitions() -> None:
 def test_required_post_evidence_waits_for_submission() -> None:
     created = make_created(1)
     for item in created["evidence"]:
-        if item["key"] == "boarding_pass":
+        if item["key"] == "item_photo":
             item["requirement"] = "REQUIRED"
+            item["timing"] = "POST"
     request = request_from_created(created)
     apply_event(request, APPROVAL_STEP_APPROVED, "U_APPROVER_1", {}, utc_now())
     assert request.status == RequestStatus.APPROVED_PENDING_POST_EVIDENCE
     command = PostEvidenceCommand(
-        evidence={
-            "boarding_pass": EvidenceInput(url="https://drive.google.com/file/d/boarding-pass")
-        }
+        evidence={"item_photo": EvidenceInput(url="https://drive.google.com/file/d/item-photo")}
     )
     apply_event(
         request,
@@ -191,3 +191,30 @@ def test_workflow_snapshot_is_immutable() -> None:
         }
     )
     assert len(request.workflow_snapshot) == 2
+
+
+def test_legacy_student_id_snapshot_is_still_readable() -> None:
+    created = make_created(1)
+    created["student_id"] = created.pop("applicant_identifier")
+    request = request_from_created(created)
+    assert request.applicant_identifier == "20260001"
+
+
+def test_professor_requires_employee_identifier() -> None:
+    values = {
+        "applicant_slack_user_id": "U_PROFESSOR",
+        "applicant_display_name": "Professor",
+        "applicant_type": "PROFESSOR",
+        "department_id": "department_1",
+        "budget_program_id": "department_budget",
+        "category_id": "supplies",
+        "amount": "10000",
+        "vendor": "Vendor",
+        "payment_date": date(2026, 8, 13),
+        "purpose": "Lab supplies",
+    }
+    with pytest.raises(ValidationError):
+        CreateExpenseCommand(**values)
+
+    command = CreateExpenseCommand(**values, applicant_identifier="E12345")
+    assert command.applicant_identifier == "E12345"

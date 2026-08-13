@@ -23,7 +23,7 @@ class CreateExpenseCommand(BaseModel):
     applicant_display_name: str
     department_id: str
     applicant_type: ApplicantType
-    student_id: str | None = None
+    applicant_identifier: str | None = None
     budget_program_id: str
     category_id: str
     amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
@@ -34,7 +34,7 @@ class CreateExpenseCommand(BaseModel):
     evidence_folder_url: str | None = None
     evidence: dict[str, EvidenceInput] = Field(default_factory=dict)
 
-    @field_validator("student_id", "evidence_folder_url", mode="before")
+    @field_validator("applicant_identifier", "evidence_folder_url", mode="before")
     @classmethod
     def optional_blank_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
@@ -42,9 +42,11 @@ class CreateExpenseCommand(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
     @model_validator(mode="after")
-    def student_has_student_id(self) -> "CreateExpenseCommand":
-        if self.applicant_type == ApplicantType.STUDENT and not self.student_id:
-            raise ValueError("Student ID is required for student applicants")
+    def applicant_has_identifier(self) -> "CreateExpenseCommand":
+        if self.applicant_type in {ApplicantType.STUDENT, ApplicantType.PROFESSOR} and not (
+            self.applicant_identifier
+        ):
+            raise ValueError("An applicant identifier is required")
         return self
 
 

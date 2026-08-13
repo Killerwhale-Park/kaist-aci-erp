@@ -1,10 +1,11 @@
-from app.config.budgets import BUDGET_SEEDS
+from app.config.budgets import BUDGET_NODE_SEEDS, BUDGET_SEEDS
 from app.config.categories import CATEGORY_SEEDS
 from app.config.departments import department_seeds
 from app.config.workflows import workflow_rule_seeds
 from app.domain.models import (
     ApprovalRule,
     ApprovalRuleStep,
+    BudgetNode,
     BudgetProgram,
     Department,
     EvidenceRequirementDefinition,
@@ -35,9 +36,52 @@ def budgets() -> list[BudgetProgram]:
     ]
 
 
+def budget_nodes() -> list[BudgetNode]:
+    return [
+        BudgetNode(
+            id=item.id,
+            parent_id=item.parent_id,
+            name_en=item.name_en,
+            name_ko=item.name_ko,
+            expense_category_id=item.expense_category_id,
+        )
+        for item in BUDGET_NODE_SEEDS
+    ]
+
+
+def budget_node_by_id(node_id: str) -> BudgetNode | None:
+    return next((item for item in budget_nodes() if item.id == node_id), None)
+
+
+def budget_children(parent_id: str | None) -> list[BudgetNode]:
+    return [item for item in budget_nodes() if item.parent_id == parent_id]
+
+
+def budget_path(node_id: str) -> tuple[BudgetNode, ...]:
+    nodes_by_id = {item.id: item for item in budget_nodes()}
+    path: list[BudgetNode] = []
+    seen: set[str] = set()
+    current = nodes_by_id.get(node_id)
+    while current is not None:
+        if current.id in seen:
+            raise ValueError("Budget configuration contains a cycle")
+        seen.add(current.id)
+        path.append(current)
+        current = nodes_by_id.get(current.parent_id) if current.parent_id else None
+    path.reverse()
+    return tuple(path)
+
+
 def categories() -> list[ExpenseCategory]:
     result: list[ExpenseCategory] = []
     for category in CATEGORY_SEEDS:
+        leaf = next(
+            (item for item in budget_nodes() if item.expense_category_id == category.id),
+            None,
+        )
+        path = budget_path(leaf.id) if leaf else ()
+        if not path:
+            raise ValueError(f"Expense category has no budget path: {category.id}")
         requirements = tuple(
             EvidenceRequirementDefinition(
                 id=f"{category.id}.{item.key}",
@@ -57,10 +101,12 @@ def categories() -> list[ExpenseCategory]:
         result.append(
             ExpenseCategory(
                 id=category.id,
-                budget_program_id=category.budget_program_id,
+                budget_program_id=path[0].id,
                 name_en=category.name_en,
                 name_ko=category.name_ko,
                 evidence_requirements=requirements,
+                budget_path_en=tuple(item.name_en for item in path),
+                budget_path_ko=tuple(item.name_ko for item in path),
             )
         )
     return result
@@ -76,6 +122,13 @@ def budget_by_id(budget_id: str) -> BudgetProgram | None:
 
 def category_by_id(category_id: str) -> ExpenseCategory | None:
     return next((item for item in categories() if item.id == category_id), None)
+
+
+def category_for_budget_node(node_id: str) -> ExpenseCategory | None:
+    node = budget_node_by_id(node_id)
+    if node is None or node.expense_category_id is None:
+        return None
+    return category_by_id(node.expense_category_id)
 
 
 def default_rule(department_id: str, category_id: str) -> ApprovalRule | None:

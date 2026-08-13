@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from app.domain.enums import (
+    ApplicantType,
     ApprovalStepStatus,
     EvidenceSubmissionStatus,
     RequestStatus,
@@ -39,13 +40,19 @@ def format_amount(amount: Decimal, currency: str) -> str:
 
 
 def request_message_blocks(request: ExpenseRequest, *, include_actions: bool = True) -> list[dict]:
-    student_id = escape_mrkdwn(request.student_id or "-")
+    applicant_identifier = escape_mrkdwn(request.applicant_identifier or "-")
+    identifier_label = {
+        ApplicantType.STUDENT: t("student_id"),
+        ApplicantType.PROFESSOR: t("employee_id"),
+    }.get(request.applicant_type, t("applicant_identifier"))
     department_name = display_name(
         escape_mrkdwn(request.department.name_en), escape_mrkdwn(request.department.name_ko)
     )
+    path_en = request.category.budget_path_en
+    path_ko = request.category.budget_path_ko
     budget_name = display_name(
-        escape_mrkdwn(request.budget_program.name_en),
-        escape_mrkdwn(request.budget_program.name_ko),
+        escape_mrkdwn(" / ".join(path_en[:-1]) or request.budget_program.name_en),
+        escape_mrkdwn(" / ".join(path_ko[:-1]) or request.budget_program.name_ko),
     )
     category_name = display_name(
         escape_mrkdwn(request.category.name_en), escape_mrkdwn(request.category.name_ko)
@@ -65,7 +72,10 @@ def request_message_blocks(request: ExpenseRequest, *, include_actions: bool = T
                     "type": "mrkdwn",
                     "text": f"*{t('applicant')}*\n<@{request.applicant_slack_user_id}>",
                 },
-                {"type": "mrkdwn", "text": f"*{t('student_id')}*\n{student_id}"},
+                {
+                    "type": "mrkdwn",
+                    "text": f"*{identifier_label}*\n{applicant_identifier}",
+                },
                 {
                     "type": "mrkdwn",
                     "text": f"*{t('department')}*\n{department_name}",

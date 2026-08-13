@@ -35,6 +35,19 @@ class BudgetProgram:
 
 
 @dataclass(frozen=True)
+class BudgetNode:
+    id: str
+    parent_id: str | None
+    name_en: str
+    name_ko: str
+    expense_category_id: str | None = None
+
+    @property
+    def is_expense_category(self) -> bool:
+        return self.expense_category_id is not None
+
+
+@dataclass(frozen=True)
 class EvidenceRequirementDefinition:
     id: str
     category_id: str
@@ -57,6 +70,8 @@ class ExpenseCategory:
     name_en: str
     name_ko: str
     evidence_requirements: tuple[EvidenceRequirementDefinition, ...] = ()
+    budget_path_en: tuple[str, ...] = ()
+    budget_path_ko: tuple[str, ...] = ()
     is_active: bool = True
 
 
@@ -124,7 +139,7 @@ class ExpenseRequest:
     applicant_slack_user_id: str
     applicant_display_name: str
     applicant_type: ApplicantType
-    student_id: str | None
+    applicant_identifier: str | None
     department_id: str
     budget_program_id: str
     category_id: str

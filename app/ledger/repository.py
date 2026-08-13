@@ -5,7 +5,7 @@ from typing import Any
 
 from app.config.budgets import LEGACY_BUDGET_IDS
 from app.config.settings import Settings
-from app.domain.catalog import default_rule
+from app.domain.catalog import categories, default_rule
 from app.domain.enums import WorkRequestStatus
 from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest, WorkRequest
 from app.domain.work_requests import (
@@ -502,6 +502,7 @@ class SlackLedgerRepository:
 
     async def settlement_assigner_ids(self) -> set[str]:
         allowed = set(await self.system_admin_ids())
+        valid_category_ids = {item.id for item in categories()}
         seen: set[str] = set()
         for root in await self._roots(CONFIG_ROOT):
             _, payload = self._metadata(root)
@@ -514,6 +515,8 @@ class SlackLedgerRepository:
             try:
                 data = await self._configuration_data(root, RULE_SAVED)
             except ConfigurationError:
+                continue
+            if data.get("category_id") not in valid_category_ids:
                 continue
             for step in data.get("steps", []):
                 allowed.update(step.get("approver_slack_user_ids", []))

@@ -8,9 +8,12 @@ from slack_sdk.errors import SlackApiError
 from app.config.settings import Settings
 from app.domain.catalog import (
     budget_by_id,
+    budget_node_by_id,
+    budget_nodes,
     budgets,
     categories,
     category_by_id,
+    category_for_budget_node,
     department_by_id,
     departments,
 )
@@ -88,14 +91,15 @@ def register_handlers(slack_app, settings: Settings) -> None:
         slack_user_id: str,
         initial_department_id: str | None = None,
         source_work_request_id: str | None = None,
+        selected_budget_node_ids: tuple[str, ...] = (),
     ) -> None:
         view = expense_context_modal(
             slack_user_id,
             departments(),
-            [item for item in budgets() if item.is_available],
-            categories(),
-            initial_department_id,
-            source_work_request_id,
+            budget_nodes(),
+            initial_department_id=initial_department_id,
+            source_work_request_id=source_work_request_id,
+            selected_budget_node_ids=selected_budget_node_ids,
         )
         await client.views_open(trigger_id=trigger_id, view=view)
 
@@ -242,6 +246,45 @@ def register_handlers(slack_app, settings: Settings) -> None:
                 note=state_value(state, f"note__{key}"),
             )
         return evidence
+
+    def selected_budget_node_ids(state: dict[str, Any]) -> tuple[str, ...]:
+        levels = sorted(
+            (
+                int(block_id.removeprefix("budget_level_")),
+                block_id,
+            )
+            for block_id in state.get("values", {})
+            if block_id.startswith("budget_level_")
+        )
+        return tuple(
+            value
+            for _, block_id in levels
+            if (value := state_value(state, block_id, "budget_node_selected"))
+        )
+
+    def expense_context_from_state(
+        body: dict,
+        *,
+        selected_path: tuple[str, ...] | None = None,
+        selected_applicant_type: ApplicantType | None = None,
+    ) -> dict:
+        state = body["view"]["state"]
+        metadata = json.loads(body["view"].get("private_metadata") or "{}")
+        applicant_type_value = state_value(state, "applicant_type", "applicant_type_changed")
+        return expense_context_modal(
+            body["user"]["id"],
+            departments(),
+            budget_nodes(),
+            initial_department_id=state_value(state, "department"),
+            source_work_request_id=metadata.get("source_work_request_id"),
+            selected_budget_node_ids=(
+                selected_path if selected_path is not None else selected_budget_node_ids(state)
+            ),
+            applicant_type=(
+                selected_applicant_type
+                or ApplicantType(applicant_type_value or ApplicantType.STUDENT.value)
+            ),
+        )
 
     def editable_command(state: dict[str, Any]) -> EditExpenseCommand:
         return EditExpenseCommand(
@@ -394,7 +437,16 @@ def register_handlers(slack_app, settings: Settings) -> None:
     @slack_app.action("new_expense_request")
     async def new_expense_request(ack, body, client):
         await ack()
-        await open_new_request(client, body["trigger_id"], body["user"]["id"])
+        selected_id = body["actions"][0].get("value")
+        selected_path = (
+            (selected_id,) if selected_id and budget_node_by_id(selected_id) is not None else ()
+        )
+        await open_new_request(
+            client,
+            body["trigger_id"],
+            body["user"]["id"],
+            selected_budget_node_ids=selected_path,
+        )
 
     @slack_app.action("new_purchase_work_request")
     async def new_purchase_work_request(ack, body, client):
@@ -593,27 +645,81 @@ def register_handlers(slack_app, settings: Settings) -> None:
             client, actor, t("work_request_completed", reference=request.reference_number)
         )
 
+    @slack_app.action("applicant_type_changed")
+    async def applicant_type_changed(ack, body, client):
+        await ack()
+        selected_type = ApplicantType(body["actions"][0]["selected_option"]["value"])
+        await client.views_update(
+            view_id=body["view"]["id"],
+            hash=body["view"]["hash"],
+            view=expense_context_from_state(body, selected_applicant_type=selected_type),
+        )
+
+    @slack_app.action("budget_node_selected")
+    async def budget_node_selected(ack, body, client):
+        await ack()
+        action = body["actions"][0]
+        level = int(action["block_id"].removeprefix("budget_level_"))
+        current_path = selected_budget_node_ids(body["view"]["state"])
+        selected_path = current_path[: level - 1] + (action["selected_option"]["value"],)
+        await client.views_update(
+            view_id=body["view"]["id"],
+            hash=body["view"]["hash"],
+            view=expense_context_from_state(body, selected_path=selected_path),
+        )
+
     @slack_app.view("expense_context")
     async def submit_expense_context(ack, body, client):
         state = body["view"]["state"]
         view_metadata = json.loads(body["view"].get("private_metadata") or "{}")
-        applicant_type = state_value(state, "applicant_type")
-        student_id = state_value(state, "student_id")
-        if applicant_type == ApplicantType.STUDENT.value and not student_id:
-            await ack(response_action="errors", errors={"student_id": t("student_id_required")})
+        applicant_type = ApplicantType(
+            state_value(state, "applicant_type", "applicant_type_changed")
+        )
+        identifier_block = (
+            "student_number" if applicant_type == ApplicantType.STUDENT else "employee_number"
+        )
+        applicant_identifier = state_value(state, identifier_block)
+        if not applicant_identifier:
+            await ack(
+                response_action="errors",
+                errors={
+                    identifier_block: (
+                        t("student_id_required")
+                        if applicant_type == ApplicantType.STUDENT
+                        else t("employee_id_required")
+                    )
+                },
+            )
             return
         department_id = state_value(state, "department")
-        budget_id = state_value(state, "budget")
-        category_id = state_value(state, "category")
-        category = category_by_id(category_id)
+        selected_path = selected_budget_node_ids(state)
+        leaf = budget_node_by_id(selected_path[-1]) if selected_path else None
+        category = category_for_budget_node(leaf.id) if leaf else None
+        category_id = category.id if category else None
+        budget_id = category.budget_program_id if category else None
         budget = budget_by_id(budget_id)
-        if category is None or budget is None or category.budget_program_id != budget.id:
-            await ack(response_action="errors", errors={"category": t("configuration_error")})
+        budget_error_block = (
+            f"budget_level_{len(selected_path)}" if selected_path else "budget_level_1"
+        )
+        if (
+            leaf is None
+            or not leaf.is_expense_category
+            or category is None
+            or budget is None
+            or category.budget_program_id != budget.id
+        ):
+            await ack(
+                response_action="errors",
+                errors={budget_error_block: t("configuration_error")},
+            )
             return
         ledger = repository(client)
         rule = await ledger.get_rule(department_id, category_id)
         if not rule.is_complete:
-            await ack(response_action="errors", errors={"category": t("configuration_error")})
+            await ack(
+                response_action="errors",
+                errors={budget_error_block: t("approval_configuration_required")},
+            )
             return
         source_work_request = None
         source_work_request_id = view_metadata.get("source_work_request_id")
@@ -630,15 +736,16 @@ def register_handlers(slack_app, settings: Settings) -> None:
             except (ApprovalPermissionError, EntityNotFoundError):
                 await ack(
                     response_action="errors",
-                    errors={"category": t("invalid_state")},
+                    errors={budget_error_block: t("invalid_state")},
                 )
                 return
         context = {
             "department_id": department_id,
-            "applicant_type": applicant_type,
-            "student_id": student_id,
+            "applicant_type": applicant_type.value,
+            "applicant_identifier": applicant_identifier,
             "budget_program_id": budget_id,
             "category_id": category_id,
+            "budget_node_path": list(selected_path),
             "approval_rule": rule_as_context(rule),
             **(
                 {"source_work_request_id": source_work_request_id} if source_work_request_id else {}
@@ -664,7 +771,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
                 applicant_display_name=body["user"].get("name") or actor,
                 department_id=context["department_id"],
                 applicant_type=context["applicant_type"],
-                student_id=context.get("student_id"),
+                applicant_identifier=context.get("applicant_identifier"),
                 budget_program_id=context["budget_program_id"],
                 category_id=context["category_id"],
                 amount=state_value(state, "amount"),

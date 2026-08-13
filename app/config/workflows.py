@@ -24,12 +24,7 @@ def workflow_rule_seeds() -> list[WorkflowRuleSeed]:
     rules: list[WorkflowRuleSeed] = []
     for department_number in range(1, 5):
         department_id = f"department_{department_number}"
-        for category_id in (
-            "supplies",
-            "lodging",
-            "airfare",
-            "conference_registration",
-        ):
+        for category_id in ("supplies",):
             steps = [
                 ApprovalStepSeed(
                     "Professor Approval",

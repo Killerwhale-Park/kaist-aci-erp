@@ -1,9 +1,9 @@
 import json
 from collections.abc import Iterable
 
-from app.domain.enums import EvidenceRequirementLevel, EvidenceTiming
+from app.domain.enums import ApplicantType, EvidenceRequirementLevel, EvidenceTiming
 from app.domain.models import (
-    BudgetProgram,
+    BudgetNode,
     Department,
     EvidenceRequirementDefinition,
     EvidenceSubmission,
@@ -23,13 +23,77 @@ def _option(value: str, name_en: str, name_ko: str) -> dict:
     }
 
 
+def _category_option(category: ExpenseCategory) -> dict:
+    name_en = " / ".join(category.budget_path_en) or category.name_en
+    name_ko = " / ".join(category.budget_path_ko) or category.name_ko
+    return {
+        "text": {"type": "plain_text", "text": f"{name_ko} / {name_en}"[:75]},
+        "value": category.id,
+    }
+
+
+def _budget_selection_blocks(
+    nodes: Iterable[BudgetNode], selected_node_ids: tuple[str, ...]
+) -> tuple[list[dict], BudgetNode | None]:
+    node_list = list(nodes)
+    by_parent: dict[str | None, list[BudgetNode]] = {}
+    for node in node_list:
+        by_parent.setdefault(node.parent_id, []).append(node)
+
+    blocks: list[dict] = []
+    parent_id: str | None = None
+    selected_leaf: BudgetNode | None = None
+    for level in range(1, len(node_list) + 1):
+        choices = by_parent.get(parent_id, [])
+        if not choices:
+            break
+        options = [_option(item.id, item.name_en, item.name_ko) for item in choices]
+        selected_id = selected_node_ids[level - 1] if level <= len(selected_node_ids) else None
+        selected = next((item for item in choices if item.id == selected_id), None)
+        element: dict = {
+            "type": "static_select",
+            "action_id": "budget_node_selected",
+            "options": options,
+        }
+        initial_option = next(
+            (item for item in options if selected and item["value"] == selected.id), None
+        )
+        if initial_option:
+            element["initial_option"] = initial_option
+        is_category_level = all(item.is_expense_category for item in choices)
+        blocks.append(
+            {
+                "type": "input",
+                "block_id": f"budget_level_{level}",
+                "dispatch_action": True,
+                "label": {
+                    "type": "plain_text",
+                    "text": (
+                        t("expense_category")
+                        if is_category_level
+                        else t("budget_level", level=level)
+                    ),
+                },
+                "element": element,
+            }
+        )
+        if selected is None:
+            break
+        if selected.is_expense_category:
+            selected_leaf = selected
+            break
+        parent_id = selected.id
+    return blocks, selected_leaf
+
+
 def expense_context_modal(
     slack_user_id: str,
     departments: Iterable[Department],
-    budgets: Iterable[BudgetProgram],
-    categories: Iterable[ExpenseCategory],
+    budget_nodes: Iterable[BudgetNode],
     initial_department_id: str | None = None,
     source_work_request_id: str | None = None,
+    selected_budget_node_ids: tuple[str, ...] = (),
+    applicant_type: ApplicantType = ApplicantType.STUDENT,
 ) -> dict:
     department_options = [_option(item.id, item.name_en, item.name_ko) for item in departments]
     department_element: dict = {
@@ -42,14 +106,29 @@ def expense_context_modal(
     )
     if initial_department is not None:
         department_element["initial_option"] = initial_department
-    return {
+    applicant_options = [
+        {"text": {"type": "plain_text", "text": t("student")}, "value": "STUDENT"},
+        {"text": {"type": "plain_text", "text": t("professor")}, "value": "PROFESSOR"},
+    ]
+    applicant_element = {
+        "type": "static_select",
+        "action_id": "applicant_type_changed",
+        "options": applicant_options,
+        "initial_option": next(
+            item for item in applicant_options if item["value"] == applicant_type.value
+        ),
+    }
+    budget_blocks, selected_leaf = _budget_selection_blocks(budget_nodes, selected_budget_node_ids)
+    identifier_block_id = (
+        "student_number" if applicant_type == ApplicantType.STUDENT else "employee_number"
+    )
+    view = {
         "type": "modal",
         "callback_id": "expense_context",
         "private_metadata": json.dumps(
             {"source_work_request_id": source_work_request_id} if source_work_request_id else {}
         ),
         "title": {"type": "plain_text", "text": t("new_request_short")},
-        "submit": {"type": "plain_text", "text": t("continue")},
         "close": {"type": "plain_text", "text": t("cancel")},
         "blocks": [
             {
@@ -68,47 +147,29 @@ def expense_context_modal(
             {
                 "type": "input",
                 "block_id": "applicant_type",
+                "dispatch_action": True,
                 "label": {"type": "plain_text", "text": t("applicant_type")},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "value",
-                    "options": [
-                        {"text": {"type": "plain_text", "text": t("student")}, "value": "STUDENT"},
-                        {"text": {"type": "plain_text", "text": t("other")}, "value": "OTHER"},
-                    ],
-                },
+                "element": applicant_element,
             },
             {
                 "type": "input",
-                "block_id": "student_id",
-                "optional": True,
-                "label": {"type": "plain_text", "text": t("student_id")},
+                "block_id": identifier_block_id,
+                "label": {
+                    "type": "plain_text",
+                    "text": (
+                        t("student_id")
+                        if applicant_type == ApplicantType.STUDENT
+                        else t("employee_id")
+                    ),
+                },
                 "element": input_element("value"),
             },
-            {
-                "type": "input",
-                "block_id": "budget",
-                "label": {"type": "plain_text", "text": t("budget")},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "value",
-                    "options": [_option(item.id, item.name_en, item.name_ko) for item in budgets],
-                },
-            },
-            {
-                "type": "input",
-                "block_id": "category",
-                "label": {"type": "plain_text", "text": t("expense_category")},
-                "element": {
-                    "type": "static_select",
-                    "action_id": "value",
-                    "options": [
-                        _option(item.id, item.name_en, item.name_ko) for item in categories
-                    ],
-                },
-            },
+            *budget_blocks,
         ],
     }
+    if selected_leaf is not None:
+        view["submit"] = {"type": "plain_text", "text": t("continue")}
+    return view
 
 
 def _work_request_base_blocks(departments: Iterable[Department]) -> list[dict]:
@@ -405,9 +466,7 @@ def approval_rule_selector_modal(
                 "element": {
                     "type": "static_select",
                     "action_id": "value",
-                    "options": [
-                        _option(item.id, item.name_en, item.name_ko) for item in categories
-                    ],
+                    "options": [_category_option(item) for item in categories],
                 },
             },
         ],
