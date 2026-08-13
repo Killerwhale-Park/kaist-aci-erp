@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.db.enums import ApplicantType
+from app.domain.enums import ApplicantType
 
 
 class EvidenceInput(BaseModel):

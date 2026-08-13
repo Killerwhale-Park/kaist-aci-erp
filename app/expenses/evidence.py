@@ -1,11 +1,11 @@
 from urllib.parse import urlparse
 
-from app.db.enums import (
+from app.domain.enums import (
     EvidenceRequirementLevel,
     EvidenceSubmissionStatus,
     EvidenceTiming,
 )
-from app.db.models import EvidenceSubmission
+from app.domain.models import EvidenceSubmission
 from app.exceptions import DomainValidationError
 from app.i18n import t
 
@@ -61,7 +61,7 @@ def required_post_evidence_complete(submissions: list[EvidenceSubmission]) -> bo
 
 
 def apply_evidence_value(submission: EvidenceSubmission, url: str | None, note: str | None) -> bool:
-    from app.db.models import utc_now
+    from datetime import UTC, datetime
 
     value_changed = submission.url != url or submission.note != note
     submission.url = url
@@ -69,5 +69,5 @@ def apply_evidence_value(submission: EvidenceSubmission, url: str | None, note: 
     submission.status = (
         EvidenceSubmissionStatus.SUBMITTED if url else EvidenceSubmissionStatus.MISSING
     )
-    submission.submitted_at = utc_now() if url else None
+    submission.submitted_at = datetime.now(UTC) if url else None
     return bool(url) and value_changed

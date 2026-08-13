@@ -1,5 +1,5 @@
-from app.db.enums import EvidenceSubmissionStatus, EvidenceTiming, RequestStatus, UserRole
-from app.db.models import BudgetProgram, ExpenseRequest, UserProfile
+from app.domain.enums import EvidenceSubmissionStatus, EvidenceTiming, RequestStatus, UserRole
+from app.domain.models import BudgetProgram, ExpenseRequest, UserProfile
 from app.i18n import t
 from app.slack.messages import status_text
 from app.slack.utils import escape_mrkdwn

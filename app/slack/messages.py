@@ -1,17 +1,14 @@
 from decimal import Decimal
 
-from app.db.enums import ApprovalStepStatus, EvidenceSubmissionStatus, RequestStatus
-from app.db.models import ExpenseRequest
+from app.domain.enums import ApprovalStepStatus, EvidenceSubmissionStatus, RequestStatus
+from app.domain.models import ExpenseRequest
 from app.i18n import t
 from app.slack.utils import escape_mrkdwn
 
 STATUS_KEYS = {
-    RequestStatus.DRAFT: "status_draft",
-    RequestStatus.SUBMITTED: "status_submitted",
     RequestStatus.IN_APPROVAL: "status_in_approval",
     RequestStatus.CHANGES_REQUESTED: "status_changes_requested",
     RequestStatus.REJECTED: "status_rejected",
-    RequestStatus.APPROVED: "status_approved",
     RequestStatus.APPROVED_PENDING_POST_EVIDENCE: "status_approved_pending_post_evidence",
     RequestStatus.COMPLETED: "status_completed",
 }

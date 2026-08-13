@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.db.enums import EvidenceRequirementLevel, EvidenceTiming
+from app.domain.enums import EvidenceRequirementLevel, EvidenceTiming
 
 
 @dataclass(frozen=True)

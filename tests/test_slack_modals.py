@@ -1,5 +1,5 @@
-from app.db.enums import EvidenceRequirementLevel, EvidenceTiming
-from app.db.models import (
+from app.domain.enums import EvidenceRequirementLevel, EvidenceTiming
+from app.domain.models import (
     BudgetProgram,
     Department,
     EvidenceRequirementDefinition,

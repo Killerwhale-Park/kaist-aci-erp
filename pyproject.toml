@@ -9,12 +9,10 @@ description = "Slack-native student expense pre-settlement and approval MVP"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "alembic>=1.14,<2",
+    "aiohttp>=3.11,<4",
     "fastapi>=0.115,<1",
     "pydantic-settings>=2.7,<3",
-    "psycopg[binary]>=3.2,<4",
     "slack-bolt>=1.22,<2",
-    "sqlalchemy>=2.0,<3",
     "uvicorn[standard]>=0.34,<1",
 ]
 
@@ -29,6 +27,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
+[tool.vercel]
+entrypoint = "app.main:app"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
@@ -39,4 +40,3 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-
