@@ -4,18 +4,19 @@
 
 - 사용자 화면: Slack App Home, Modal, DM
 - 증빙: Google Drive URL
-- 승인 알림: 학과별 비공개 채널
-- 상태 저장: 비공개 Slack 원장 채널의 메시지와 스레드
+- 승인 및 상태 저장: 관리자가 지정한 비공개 채널의 메시지와 스레드
 - 실행 환경: FastAPI on Vercel
 
 별도 웹 화면과 데이터베이스는 사용하지 않습니다. 승인 단계는 설정에 따라 N단계로 동작합니다. 내부 구조는 [설계 문서](docs/design.md)에 정리되어 있습니다.
 
 ## Slack 준비
 
-다음 채널이 필요합니다.
+학과별·예산 항목별 운영 방식에 맞춰 비공개 승인 채널을 필요한 만큼 만듭니다. 하나의 채널을 여러 규칙이 공유해도 되고, 규칙마다 별도 채널을 사용해도 됩니다.
 
-- 원장 채널 1개: 봇과 시스템 관리자만 참여
-- 학과별 승인 채널: 봇과 해당 승인자만 참여
+- 각 신청 메시지가 해당 채널의 원장입니다.
+- 상태 변경 이력은 신청 메시지의 스레드에 기록됩니다.
+- 봇과 해당 채널의 승인자를 채널에 초대합니다.
+- 봇은 이 업무에 사용하는 비공개 채널에만 초대합니다.
 
 Bot scopes:
 
@@ -27,19 +28,17 @@ groups:read
 users:read
 ```
 
-scope를 변경했다면 앱을 workspace에 다시 설치합니다. 봇은 원장 채널과 모든 승인 채널에 초대해야 합니다.
+scope를 변경했다면 앱을 workspace에 다시 설치합니다. 봇은 사용하는 모든 승인 채널에 초대해야 합니다.
 
 ## 환경변수
 
 ```text
-ENVIRONMENT=production
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_SIGNING_SECRET=...
-SLACK_LEDGER_CHANNEL_ID=G...
 BOOTSTRAP_SYSTEM_ADMIN_SLACK_USER_IDS=U...
 ```
 
-`SLACK_LEDGER_CHANNEL_ID`는 원장 채널 ID입니다. `BOOTSTRAP_SYSTEM_ADMIN_SLACK_USER_IDS`는 Slack 내부 관리자 설정이 생기기 전 최초 1회에만 사용됩니다.
+`BOOTSTRAP_SYSTEM_ADMIN_SLACK_USER_IDS`는 Slack 내부 관리자 설정이 생기기 전 최초 1회에만 사용됩니다. 채널 ID는 환경변수로 관리하지 않습니다.
 
 ## Vercel 배포
 
@@ -82,4 +81,4 @@ ruff format --check .
 
 ## 데이터 보존
 
-Slack 메시지 보존 정책이 곧 원장 보존 기간입니다. 이 앱은 공식 회계 원장이 아니라 행정 전달 전 협업 도구입니다. 장기 보존이 필요하면 원장 채널을 정기적으로 내보내 Google Drive에 보관해야 합니다.
+Slack 메시지 보존 정책이 곧 기록 보존 기간입니다. 이 앱은 공식 회계 원장이 아니라 행정 전달 전 협업 도구입니다. 장기 보존이 필요하면 승인 채널을 정기적으로 내보내 Google Drive에 보관해야 합니다.

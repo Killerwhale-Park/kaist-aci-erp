@@ -32,9 +32,11 @@ async def test_rule_and_administrators_are_stored_in_slack_messages(
     assert loaded == saved
     assert loaded.version == 1
     assert loaded.is_complete
+    assert slack_client.messages["C_APPROVAL"]
 
     await ledger.replace_system_admins("U_ADMIN", ["U_NEW_ADMIN"])
     assert await ledger.system_admin_ids() == {"U_NEW_ADMIN"}
+    assert slack_client.messages["C_DEPARTMENT_2"]
 
 
 @pytest.mark.asyncio

@@ -1,142 +1,79 @@
 # Slack message-ledger design
 
-## 1. Scope
+## Scope
 
-This system supports student expense pre-settlement before records enter an official administrative process. One Slack App serves four departments. Slack is the only user interface. Evidence files remain in Google Drive; the application records HTTPS URLs only.
+이 시스템은 공식 행정 절차로 전달하기 전 학생 정산 요청과 내부 승인을 처리합니다. Slack이 유일한 사용자 화면이며, 증빙 파일은 Google Drive에 두고 HTTPS URL만 기록합니다.
 
-Unconfirmed accounting policy is configuration, not code. Initial evidence candidates are optional until a policy owner explicitly marks them required.
-
-## 2. Architecture
+## Architecture
 
 ```text
 Slack Modal / App Home / Buttons / DM
                   |
           FastAPI + Async Bolt
                   |
-         Slack handlers/renderers
+      workflow reducer + validation
                   |
-   Pure Python workflow reducer + validation
-                  |
-     Private Slack message ledger
+   private Slack approval channels
 ```
 
-The backend is stateless. It has no SQL database, local persistence, migration process, or user-facing website.
+백엔드는 상태를 보관하지 않습니다. SQL 데이터베이스, 로컬 영속 파일, 별도 웹 화면은 없습니다.
 
-## 3. Ledger channels
+## Channel model
 
-### Central ledger channel
+중앙 원장 채널은 없습니다. 각 승인 규칙은 비공개 채널 하나를 지정하며, 학과별·항목별로 같은 채널을 공유하거나 서로 다른 채널을 선택할 수 있습니다.
 
-A single private channel stores machine-readable records. Only the bot and system administrators need membership.
+봇은 `conversations.list`로 자신이 참여한 비공개 채널을 찾고 각 채널의 메시지 metadata를 조회합니다. 따라서 채널 ID를 환경변수에 넣지 않습니다.
 
-Root messages use one of these metadata types:
+채널에는 두 종류의 root message가 저장됩니다.
 
-- `expense_record`: one root per expense; contains a compact materialized summary
-- `configuration_record`: approval-rule or system-admin configuration version
+- `expense_record`: 신청 한 건의 현재 상태와 승인 버튼
+- `configuration_record`: 승인 규칙 또는 관리자 설정
 
-Thread replies contain compressed, chunked metadata:
+신청 메시지의 thread에는 `expense_event_chunk`, 설정 메시지의 thread에는 `configuration_chunk`가 append-only로 추가됩니다. 큰 payload는 zlib 압축 후 여러 metadata message로 나눕니다. 모든 chunk가 있는 event만 유효합니다.
 
-- `expense_event_chunk`
-- `configuration_chunk`
+## Expense events
 
-The visible text is a human-readable audit description. Structured payloads are zlib-compressed JSON encoded as URL-safe base64. Chunks have a record ID, index, and count. A record is accepted only when every chunk is present.
+첫 event는 `REQUEST_CREATED`이며 다음 snapshot을 포함합니다.
 
-### Department approval channels
+- 신청자, 학과, 예산, 카테고리
+- 금액, 거래처, 날짜, 목적
+- Drive 증빙 URL
+- 증빙 요구사항
+- 순서가 있는 승인 단계와 승인자
 
-The system posts a rendered mirror of the request into the configured department private channel. Approvers interact with its buttons. The mirror is a projection, not the source of truth; the central ledger thread is authoritative.
-
-## 4. Expense event model
-
-The first complete event must be `REQUEST_CREATED`. It contains:
-
-- request/reference ID
-- applicant identity and student ID
-- department, budget, and category snapshot
-- amount, vendor, date, purpose
-- Drive folder/evidence URLs
-- evidence requirement snapshot
-- ordered approval workflow and approver snapshot
-- submission time
-
-Subsequent append-only events are:
+후속 event:
 
 - `APPROVAL_STEP_APPROVED`
 - `CHANGES_REQUESTED`
 - `REQUEST_REJECTED`
 - `REQUEST_RESUBMITTED`
 - `POST_EVIDENCE_SUBMITTED`
-- `MIRROR_LINKED`
 
-No event is edited or deleted by application code. The root summary and visible approval message may be updated because they are caches/projections.
+상태는 Slack timestamp 순서로 event를 replay해 계산합니다. 동시에 들어온 충돌 action은 처음 유효한 event만 반영하고 나머지는 감사 이력으로 남깁니다.
 
-## 5. State transition reducer
+## Workflow
 
 ```text
-REQUEST_CREATED
-      |
-      v
-IN_APPROVAL(step 1)
-  | approve              | changes              | reject
-  v                      v                      v
-next step / final   CHANGES_REQUESTED        REJECTED
-                         |
-                      resubmit
-                         |
-                         v
-                 same step IN_APPROVAL
+IN_APPROVAL(step 1..N)
+  | approve       | changes          | reject
+  v               v                  v
+next/final   CHANGES_REQUESTED     REJECTED
+                    |
+                 resubmit
+                    v
+             same approval step
 
-final approval
-  | required POST missing       | complete
-  v                             v
-APPROVED_PENDING_POST_EVIDENCE  COMPLETED
+final approval -> required POST evidence -> COMPLETED
 ```
 
-The reducer does not know the number of approval steps. It advances through the ordered snapshot until no step remains.
+엔진은 단계 수를 미리 알지 않습니다. 각 단계에서는 설정된 승인자 중 한 명이 승인할 수 있습니다. 권한은 Slack interaction의 actor ID와 신청 당시 workflow snapshot을 비교해 검사합니다.
 
-Each step uses the `ANY` policy: any configured approver may complete it. Slack buttons and user selectors are not authorization boundaries; the actor Slack ID in the signed interaction is checked against the current snapshot.
+## Query and configuration
 
-## 6. Concurrency
+App Home 조회 시 root metadata를 먼저 필터링합니다. 신청자 또는 현재 승인자가 일치하는 메시지만 thread를 replay합니다.
 
-Slack messages do not provide database-style compare-and-swap transactions. The design therefore uses deterministic event replay:
+승인 규칙은 선택한 승인 채널에 저장됩니다. 시스템 관리자 설정은 봇이 참여한 업무 채널에 복제되며 최신 timestamp의 설정을 사용합니다. 새 신청은 최신 규칙을 snapshot으로 저장하므로 이후 규칙 변경이 기존 신청을 바꾸지 않습니다.
 
-1. Events are ordered by Slack message timestamp.
-2. The first action valid for the current state is applied.
-3. A stale or conflicting later action remains in the audit thread but is ignored by the reducer.
-4. The root summary and approval mirror are refreshed from the replayed state.
+## Retention
 
-This makes simultaneous approvals deterministic without an external lock service.
-
-## 7. Query model
-
-The bot does not use `search.messages`, because that method requires a user token. It calls `conversations.history` on the known ledger channel with `include_all_metadata=true`.
-
-The compact root summary supports filtering without replaying every request:
-
-- applicant ID for App Home “My Requests”
-- current approver IDs for “Pending Approvals”
-- department/category/status/reference fields
-
-Only matching requests require `conversations.replies` and full replay.
-
-## 8. Runtime configuration
-
-Static catalog data lives in `app/config/`:
-
-- four departments
-- budget programs
-- expense categories
-- initial optional evidence candidates
-- sample step names
-
-Approval channel, ordered steps, selected approvers, and system administrators are versioned configuration records in the ledger channel. A new request snapshots the latest complete rule. Later rule changes do not alter existing requests.
-
-## 9. Failure behavior
-
-- Missing event chunks: ignore the incomplete event.
-- Stale action: retain for audit, ignore during state reduction.
-- Approval mirror update failure: ledger remains authoritative and can regenerate the mirror.
-- Ledger root cache update failure: a direct request load replays the thread and repairs the projection on the next mutation.
-- Slack API outage: no local fallback writes are attempted.
-
-## 10. Retention boundary
-
-Slack message retention is the primary durability limit. This ledger is appropriate for low-volume student self-government workflow coordination, not as the final statutory accounting archive. The official administrative system remains the final record. If longer student-organization retention is required, export the private ledger periodically to Google Drive.
+Slack 보존 정책이 기록의 내구성 한계입니다. 이 시스템은 공식 회계 원장이 아닙니다. 장기 보존이 필요하면 관련 채널을 정기적으로 내보내 Google Drive에 보관합니다.

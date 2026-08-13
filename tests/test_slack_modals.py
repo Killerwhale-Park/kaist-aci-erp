@@ -21,7 +21,6 @@ def test_context_and_dynamic_evidence_modal_use_block_kit_limits() -> None:
                 id=f"department_{index}",
                 name_en=f"Department {index}",
                 name_ko=f"학과 {index}",
-                approval_channel_id=f"C_DEPARTMENT_{index}",
             )
             for index in range(1, 5)
         ],

@@ -90,35 +90,15 @@ def register_handlers(slack_app, settings: Settings) -> None:
         )
         await client.views_publish(user_id=slack_user_id, view=view)
 
-    async def synchronize_request_messages(client, request: ExpenseRequest) -> ExpenseRequest:
+    async def synchronize_request_message(client, request: ExpenseRequest) -> ExpenseRequest:
         ledger = repository(client)
-        ledger_blocks = request_message_blocks(request, include_actions=False)
         text = request_fallback_text(request)
-        await ledger.update_ledger_view(request, text=text, blocks=ledger_blocks)
-
-        if request.approval_message_ts:
-            await client.chat_update(
-                channel=request.approval_channel_id,
-                ts=request.approval_message_ts,
-                text=text,
-                blocks=request_message_blocks(request),
-            )
-            return request
-
-        response = await client.chat_postMessage(
-            channel=request.approval_channel_id,
+        await ledger.update_request_view(
+            request,
             text=text,
             blocks=request_message_blocks(request),
-            unfurl_links=False,
-            unfurl_media=False,
         )
-        linked = await ledger.link_approval_message(request.id, response["ts"])
-        await ledger.update_ledger_view(
-            linked,
-            text=request_fallback_text(linked),
-            blocks=request_message_blocks(linked, include_actions=False),
-        )
-        return linked
+        return request
 
     async def safe_dm(
         client, slack_user_id: str, text: str, blocks: list[dict] | None = None
@@ -463,7 +443,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
         try:
             ledger = repository(client)
             request = await ledger.create_request(created)
-            request = await synchronize_request_messages(client, request)
+            request = await synchronize_request_message(client, request)
             confirmation = t("request_submitted", reference=request.reference_number)
             warning_links = drive_warning_urls(
                 [command.evidence_folder_url] + [item.url for item in command.evidence.values()]
@@ -492,7 +472,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except InvalidStateTransitionError:
             await send_ephemeral(client, body, t("invalid_state"), respond)
             return
-        request = await synchronize_request_messages(client, request)
+        request = await synchronize_request_message(client, request)
         await notify_after_transition(client, request)
         await publish_home(client, actor)
 
@@ -538,7 +518,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except InvalidStateTransitionError:
             await ack(response_action="errors", errors={"decision_reason": t("invalid_state")})
             return
-        request = await synchronize_request_messages(client, request)
+        request = await synchronize_request_message(client, request)
         await notify_after_transition(client, request, reason)
         await publish_home(client, actor)
 
@@ -593,7 +573,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except InvalidStateTransitionError:
             await ack(response_action="errors", errors={"purpose": t("invalid_state")})
             return
-        request = await synchronize_request_messages(client, request)
+        request = await synchronize_request_message(client, request)
         await notify_after_transition(client, request)
         if drive_warning_urls(
             [command.evidence_folder_url] + [item.url for item in command.evidence.values()]
@@ -631,7 +611,7 @@ def register_handlers(slack_app, settings: Settings) -> None:
         except InvalidStateTransitionError:
             await ack(response_action="errors", errors={fallback: t("invalid_state")})
             return
-        request = await synchronize_request_messages(client, request)
+        request = await synchronize_request_message(client, request)
         await notify_after_transition(client, request)
         if drive_warning_urls([item.url for item in command.evidence.values()]):
             await safe_dm(client, actor, t("non_drive_warning"))
@@ -804,6 +784,9 @@ def register_handlers(slack_app, settings: Settings) -> None:
             await ack()
         except ApprovalPermissionError:
             await ack(response_action="errors", errors={"system_admins": t("unauthorized")})
+            return
+        except ConfigurationError:
+            await ack(response_action="errors", errors={"system_admins": t("configuration_error")})
             return
         await safe_dm(client, actor, t("admins_saved"))
         await publish_home(client, actor)

@@ -9,7 +9,7 @@ slack_app = create_slack_app(settings)
 slack_handler = AsyncSlackRequestHandler(slack_app)
 
 
-app = FastAPI(title=settings.app_name)
+app = FastAPI(title="AIC Expense Approval")
 
 
 @app.get("/health")
@@ -19,11 +19,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/ready")
 async def ready() -> dict[str, str]:
-    if not (
-        settings.slack_bot_token
-        and settings.slack_signing_secret
-        and settings.slack_ledger_channel_id
-    ):
+    if not (settings.slack_bot_token and settings.slack_signing_secret):
         return {"status": "configuration_required"}
     return {"status": "ok"}
 

@@ -18,7 +18,6 @@ def departments() -> list[Department]:
             id=item.id,
             name_en=item.name_en,
             name_ko=item.name_ko,
-            approval_channel_id=item.approval_channel_id,
         )
         for item in department_seeds()
     ]

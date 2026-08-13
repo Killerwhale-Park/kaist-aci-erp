@@ -6,7 +6,6 @@ class DepartmentSeed:
     id: str
     name_en: str
     name_ko: str
-    approval_channel_id: str | None = None
 
 
 def department_seeds() -> list[DepartmentSeed]:

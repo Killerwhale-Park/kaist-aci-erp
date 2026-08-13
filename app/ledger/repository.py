@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import logging
+import asyncio
 from typing import Any
 
 from app.config.settings import Settings
 from app.domain.catalog import default_rule
 from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest
 from app.domain.workflow import (
-    MIRROR_LINKED,
     REQUEST_CREATED,
     replay_events,
     request_from_created,
@@ -17,31 +16,72 @@ from app.domain.workflow import (
 from app.exceptions import ApprovalPermissionError, ConfigurationError, EntityNotFoundError
 from app.ledger.codec import decode_chunks, encode_chunks, event_record
 
-logger = logging.getLogger(__name__)
-
 EXPENSE_ROOT = "expense_record"
 EXPENSE_EVENT_CHUNK = "expense_event_chunk"
 CONFIG_ROOT = "configuration_record"
 CONFIG_CHUNK = "configuration_chunk"
 RULE_SAVED = "RULE_SAVED"
 SYSTEM_ADMINS_SAVED = "SYSTEM_ADMINS_SAVED"
+CHANNEL_ID = "_channel_id"
 
 
 class SlackLedgerRepository:
     def __init__(self, client, settings: Settings) -> None:
         self.client = client
         self.settings = settings
-        self.channel_id = settings.slack_ledger_channel_id
-        if not self.channel_id:
-            raise ConfigurationError("SLACK_LEDGER_CHANNEL_ID is required")
+        self._channel_cache: list[str] | None = None
+        self._history_cache: dict[str, list[dict]] = {}
 
-    async def _history(self) -> list[dict]:
+    async def _channel_ids(self) -> list[str]:
+        if self._channel_cache is not None:
+            return self._channel_cache
+
+        channel_ids: list[str] = []
+        cursor: str | None = None
+        while True:
+            response = await self.client.conversations_list(
+                types="private_channel",
+                exclude_archived=True,
+                limit=200,
+                **({"cursor": cursor} if cursor else {}),
+            )
+            channel_ids.extend(
+                channel["id"]
+                for channel in response.get("channels", [])
+                if channel.get("is_member", True)
+            )
+            cursor = response.get("response_metadata", {}).get("next_cursor") or None
+            if not cursor:
+                self._channel_cache = sorted(set(channel_ids))
+                return self._channel_cache
+
+    async def _history(self, channel_id: str) -> list[dict]:
+        if channel_id in self._history_cache:
+            return self._history_cache[channel_id]
+
         messages: list[dict] = []
         cursor: str | None = None
         while True:
             response = await self.client.conversations_history(
-                channel=self.channel_id,
-                limit=1000,
+                channel=channel_id,
+                limit=999,
+                include_all_metadata=True,
+                **({"cursor": cursor} if cursor else {}),
+            )
+            messages.extend(response.get("messages", []))
+            cursor = response.get("response_metadata", {}).get("next_cursor") or None
+            if not cursor:
+                self._history_cache[channel_id] = messages
+                return messages
+
+    async def _thread(self, channel_id: str, root_ts: str) -> list[dict]:
+        messages: list[dict] = []
+        cursor: str | None = None
+        while True:
+            response = await self.client.conversations_replies(
+                channel=channel_id,
+                ts=root_ts,
+                limit=999,
                 include_all_metadata=True,
                 **({"cursor": cursor} if cursor else {}),
             )
@@ -50,34 +90,27 @@ class SlackLedgerRepository:
             if not cursor:
                 return messages
 
-    async def _thread(self, root_ts: str) -> list[dict]:
-        messages: list[dict] = []
-        cursor: str | None = None
-        while True:
-            response = await self.client.conversations_replies(
-                channel=self.channel_id,
-                ts=root_ts,
-                limit=1000,
-                include_all_metadata=True,
-                **({"cursor": cursor} if cursor else {}),
-            )
-            messages.extend(response.get("messages", []))
-            cursor = response.get("response_metadata", {}).get("next_cursor") or None
-            if not cursor:
-                return messages
+    def _invalidate_history(self, channel_id: str) -> None:
+        self._history_cache.pop(channel_id, None)
 
     @staticmethod
     def _metadata(message: dict) -> tuple[str | None, dict[str, Any]]:
         metadata = message.get("metadata") or {}
         return metadata.get("event_type"), metadata.get("event_payload") or {}
 
-    async def _expense_roots(self) -> list[dict]:
-        roots = []
-        for message in await self._history():
-            event_type, _ = self._metadata(message)
-            if event_type == EXPENSE_ROOT and not message.get("thread_ts"):
-                roots.append(message)
+    async def _roots(self, event_type: str) -> list[dict]:
+        roots: list[dict] = []
+        channel_ids = await self._channel_ids()
+        histories = await asyncio.gather(*(self._history(channel_id) for channel_id in channel_ids))
+        for channel_id, messages in zip(channel_ids, histories, strict=True):
+            for message in messages:
+                message_event_type, _ = self._metadata(message)
+                if message_event_type == event_type and not message.get("thread_ts"):
+                    roots.append({**message, CHANNEL_ID: channel_id})
         return sorted(roots, key=lambda item: item.get("ts", ""), reverse=True)
+
+    async def _expense_roots(self) -> list[dict]:
+        return await self._roots(EXPENSE_ROOT)
 
     async def _find_expense_root(self, request_id: str) -> dict:
         for message in await self._expense_roots():
@@ -89,6 +122,7 @@ class SlackLedgerRepository:
     async def _append_chunks(
         self,
         *,
+        channel_id: str,
         root_ts: str,
         metadata_event_type: str,
         record_type: str,
@@ -99,7 +133,7 @@ class SlackLedgerRepository:
         for index, payload in enumerate(chunks):
             text = audit_text if index == 0 else f"{audit_text} (continued {index + 1})"
             await self.client.chat_postMessage(
-                channel=self.channel_id,
+                channel=channel_id,
                 thread_ts=root_ts,
                 text=text,
                 metadata={"event_type": metadata_event_type, "event_payload": payload},
@@ -109,30 +143,38 @@ class SlackLedgerRepository:
 
     async def create_request(self, created_data: dict[str, Any]) -> ExpenseRequest:
         provisional = request_from_created(created_data)
+        channel_id = provisional.approval_channel_id
+        if channel_id not in await self._channel_ids():
+            raise ConfigurationError("The app is not a member of the configured channel")
+
         response = await self.client.chat_postMessage(
-            channel=self.channel_id,
-            text=f"Expense ledger record {provisional.reference_number}",
+            channel=channel_id,
+            text=f"Expense request {provisional.reference_number}",
             metadata={"event_type": EXPENSE_ROOT, "event_payload": request_summary(provisional)},
             unfurl_links=False,
             unfurl_media=False,
         )
+        self._invalidate_history(channel_id)
         root_ts = response["ts"]
         await self._append_event_to_root(
+            channel_id,
             root_ts,
             REQUEST_CREATED,
             provisional.applicant_slack_user_id,
             created_data,
         )
-        return await self._load_from_root({"ts": root_ts})
+        return await self._load_from_root({"ts": root_ts, CHANNEL_ID: channel_id})
 
     async def _append_event_to_root(
         self,
+        channel_id: str,
         root_ts: str,
         kind: str,
         actor: str,
         data: dict[str, Any],
     ) -> None:
         await self._append_chunks(
+            channel_id=channel_id,
             root_ts=root_ts,
             metadata_event_type=EXPENSE_EVENT_CHUNK,
             record_type="expense_event",
@@ -146,16 +188,16 @@ class SlackLedgerRepository:
         root = await self._find_expense_root(request_id)
         current = await self._load_from_root(root)
         validate_transition(current, kind, actor, data or {})
-        await self._append_event_to_root(root["ts"], kind, actor, data or {})
+        await self._append_event_to_root(root[CHANNEL_ID], root["ts"], kind, actor, data or {})
         updated = await self._load_from_root(root)
-        await self._update_summary_cache(root, updated)
+        await self._update_summary(root, updated)
         return updated
 
-    async def _update_summary_cache(self, root: dict, request: ExpenseRequest) -> None:
+    async def _update_summary(self, root: dict, request: ExpenseRequest) -> None:
         arguments: dict[str, Any] = {
-            "channel": self.channel_id,
+            "channel": root[CHANNEL_ID],
             "ts": root["ts"],
-            "text": root.get("text") or f"Expense ledger record {request.reference_number}",
+            "text": root.get("text") or f"Expense request {request.reference_number}",
             "metadata": {
                 "event_type": EXPENSE_ROOT,
                 "event_payload": request_summary(request),
@@ -164,26 +206,19 @@ class SlackLedgerRepository:
         if root.get("blocks") is not None:
             arguments["blocks"] = root["blocks"]
         await self.client.chat_update(**arguments)
-
-    async def link_approval_message(
-        self, request_id: str, approval_message_ts: str
-    ) -> ExpenseRequest:
-        return await self.append_event(
-            request_id,
-            MIRROR_LINKED,
-            "",
-            {"approval_message_ts": approval_message_ts},
-        )
+        self._invalidate_history(root[CHANNEL_ID])
 
     async def _load_from_root(self, root: dict) -> ExpenseRequest:
-        root_ts = root["ts"]
-        records = decode_chunks(await self._thread(root_ts), event_type=EXPENSE_EVENT_CHUNK)
+        records = decode_chunks(
+            await self._thread(root[CHANNEL_ID], root["ts"]),
+            event_type=EXPENSE_EVENT_CHUNK,
+        )
         events = [
             {"ts": record["ts"], **record["data"]}
             for record in records
             if record["record_type"] == "expense_event"
         ]
-        return replay_events(events, ledger_ts=root_ts)
+        return replay_events(events, message_ts=root["ts"])
 
     async def get_request(self, request_id: str) -> ExpenseRequest:
         return await self._load_from_root(await self._find_expense_root(request_id))
@@ -206,32 +241,33 @@ class SlackLedgerRepository:
                     matches.append(request)
         return matches
 
-    async def update_ledger_view(
+    async def update_request_view(
         self, request: ExpenseRequest, *, text: str, blocks: list[dict]
     ) -> None:
         await self.client.chat_update(
-            channel=self.channel_id,
-            ts=request.ledger_message_ts,
+            channel=request.approval_channel_id,
+            ts=request.message_ts,
             text=text,
             blocks=blocks,
             metadata={"event_type": EXPENSE_ROOT, "event_payload": request_summary(request)},
         )
+        self._invalidate_history(request.approval_channel_id)
 
     async def _configuration_roots(self, configuration_type: str, key: str) -> list[dict]:
         matches = []
-        for message in await self._history():
-            event_type, payload = self._metadata(message)
+        for message in await self._roots(CONFIG_ROOT):
+            _, payload = self._metadata(message)
             if (
-                event_type == CONFIG_ROOT
-                and payload.get("configuration_type") == configuration_type
+                payload.get("configuration_type") == configuration_type
                 and payload.get("key") == key
-                and not message.get("thread_ts")
             ):
                 matches.append(message)
-        return sorted(matches, key=lambda item: item.get("ts", ""), reverse=True)
+        return matches
 
     async def _configuration_data(self, root: dict, record_type: str) -> dict[str, Any]:
-        records = decode_chunks(await self._thread(root["ts"]), event_type=CONFIG_CHUNK)
+        records = decode_chunks(
+            await self._thread(root[CHANNEL_ID], root["ts"]), event_type=CONFIG_CHUNK
+        )
         record = next((item for item in records if item["record_type"] == record_type), None)
         if record is None:
             raise ConfigurationError("Configuration record is incomplete")
@@ -240,30 +276,40 @@ class SlackLedgerRepository:
     async def get_rule(self, department_id: str, category_id: str) -> ApprovalRule:
         key = f"{department_id}:{category_id}"
         roots = await self._configuration_roots("approval_rule", key)
-        if not roots:
-            rule = default_rule(department_id, category_id)
-            if rule is None:
-                raise EntityNotFoundError("Approval rule not found")
-            return rule
-        data = await self._configuration_data(roots[0], RULE_SAVED)
-        return ApprovalRule(
-            department_id=data["department_id"],
-            budget_program_id=data["budget_program_id"],
-            category_id=data["category_id"],
-            approval_channel_id=data["approval_channel_id"],
-            steps=tuple(
-                ApprovalRuleStep(
-                    name_en=item["name_en"],
-                    name_ko=item["name_ko"],
-                    approver_slack_user_ids=tuple(item["approver_slack_user_ids"]),
-                )
-                for item in data["steps"]
-            ),
-            version=int(data["version"]),
-        )
+        for root in roots:
+            try:
+                data = await self._configuration_data(root, RULE_SAVED)
+            except ConfigurationError:
+                continue
+            return ApprovalRule(
+                department_id=data["department_id"],
+                budget_program_id=data["budget_program_id"],
+                category_id=data["category_id"],
+                approval_channel_id=data["approval_channel_id"],
+                steps=tuple(
+                    ApprovalRuleStep(
+                        name_en=item["name_en"],
+                        name_ko=item["name_ko"],
+                        approver_slack_user_ids=tuple(item["approver_slack_user_ids"]),
+                    )
+                    for item in data["steps"]
+                ),
+                version=int(data["version"]),
+            )
+
+        rule = default_rule(department_id, category_id)
+        if rule is None:
+            raise EntityNotFoundError("Approval rule not found")
+        return rule
 
     async def save_rule(self, actor: str, rule: ApprovalRule) -> ApprovalRule:
         await self.assert_system_admin(actor)
+        if not rule.approval_channel_id:
+            raise ConfigurationError("Approval channel is required")
+        if rule.approval_channel_id not in await self._channel_ids():
+            raise ConfigurationError("The app is not a member of the approval channel")
+
+        admins = await self.system_admin_ids()
         previous = await self.get_rule(rule.department_id, rule.category_id)
         stored = ApprovalRule(
             department_id=rule.department_id,
@@ -290,8 +336,8 @@ class SlackLedgerRepository:
         }
         key = f"{stored.department_id}:{stored.category_id}"
         response = await self.client.chat_postMessage(
-            channel=self.channel_id,
-            text=f"Approval rule {key} version {stored.version}",
+            channel=stored.approval_channel_id,
+            text=f"Approval workflow updated: {key} (version {stored.version})",
             metadata={
                 "event_type": CONFIG_ROOT,
                 "event_payload": {
@@ -302,34 +348,38 @@ class SlackLedgerRepository:
                 },
             },
         )
+        self._invalidate_history(stored.approval_channel_id)
         await self._append_chunks(
+            channel_id=stored.approval_channel_id,
             root_ts=response["ts"],
             metadata_event_type=CONFIG_CHUNK,
             record_type=RULE_SAVED,
             data=data,
             audit_text=f"Approval rule saved by <@{actor}>",
         )
+        await self._write_admin_record(stored.approval_channel_id, actor, admins)
         return stored
 
     async def system_admin_ids(self) -> set[str]:
         roots = await self._configuration_roots("system_admins", "workspace")
-        if not roots:
-            return self.settings.bootstrap_system_admin_ids
-        data = await self._configuration_data(roots[0], SYSTEM_ADMINS_SAVED)
-        return set(data["slack_user_ids"])
+        for root in roots:
+            try:
+                data = await self._configuration_data(root, SYSTEM_ADMINS_SAVED)
+            except ConfigurationError:
+                continue
+            return set(data["slack_user_ids"])
+        return self.settings.bootstrap_system_admin_ids
 
     async def assert_system_admin(self, actor: str) -> None:
         if actor not in await self.system_admin_ids():
             raise ApprovalPermissionError("System administrator role required")
 
-    async def replace_system_admins(self, actor: str, slack_user_ids: list[str]) -> None:
-        await self.assert_system_admin(actor)
-        selected = sorted(set(slack_user_ids))
-        if not selected:
-            raise ConfigurationError("At least one administrator is required")
+    async def _write_admin_record(
+        self, channel_id: str, actor: str, slack_user_ids: set[str]
+    ) -> None:
         response = await self.client.chat_postMessage(
-            channel=self.channel_id,
-            text="System administrator configuration",
+            channel=channel_id,
+            text="System administrators updated",
             metadata={
                 "event_type": CONFIG_ROOT,
                 "event_payload": {
@@ -339,10 +389,23 @@ class SlackLedgerRepository:
                 },
             },
         )
+        self._invalidate_history(channel_id)
         await self._append_chunks(
+            channel_id=channel_id,
             root_ts=response["ts"],
             metadata_event_type=CONFIG_CHUNK,
             record_type=SYSTEM_ADMINS_SAVED,
-            data={"slack_user_ids": selected},
+            data={"slack_user_ids": sorted(slack_user_ids)},
             audit_text=f"System administrators saved by <@{actor}>",
         )
+
+    async def replace_system_admins(self, actor: str, slack_user_ids: list[str]) -> None:
+        await self.assert_system_admin(actor)
+        selected = set(slack_user_ids)
+        if not selected:
+            raise ConfigurationError("At least one administrator is required")
+        channel_ids = await self._channel_ids()
+        if not channel_ids:
+            raise ConfigurationError("The app must join at least one private channel")
+        for channel_id in channel_ids:
+            await self._write_admin_record(channel_id, actor, selected)

@@ -49,7 +49,6 @@ CHANGES_REQUESTED = "CHANGES_REQUESTED"
 REQUEST_REJECTED = "REQUEST_REJECTED"
 REQUEST_RESUBMITTED = "REQUEST_RESUBMITTED"
 POST_EVIDENCE_SUBMITTED = "POST_EVIDENCE_SUBMITTED"
-MIRROR_LINKED = "MIRROR_LINKED"
 
 
 def utc_now() -> datetime:
@@ -154,7 +153,7 @@ def request_from_created(data: dict[str, Any]) -> ExpenseRequest:
     department_data = data["department"]
     budget_data = data["budget"]
     category_data = data["category"]
-    department = Department(**department_data, approval_channel_id=data["approval_channel_id"])
+    department = Department(**department_data)
     budget = BudgetProgram(**budget_data)
     category = ExpenseCategory(
         id=category_data["id"],
@@ -388,20 +387,16 @@ def apply_event(
             request.status = RequestStatus.COMPLETED
         return
 
-    if kind == MIRROR_LINKED:
-        request.approval_message_ts = data["approval_message_ts"]
-        return
-
     raise InvalidStateTransitionError(f"Unsupported event: {kind}")
 
 
-def replay_events(events: list[dict[str, Any]], *, ledger_ts: str) -> ExpenseRequest:
+def replay_events(events: list[dict[str, Any]], *, message_ts: str) -> ExpenseRequest:
     ordered = sorted(events, key=lambda item: item["ts"])
     created = next((item for item in ordered if item["kind"] == REQUEST_CREATED), None)
     if created is None:
         raise ConfigurationError("Expense record has no creation event")
     request = request_from_created(created["data"])
-    request.ledger_message_ts = ledger_ts
+    request.message_ts = message_ts
     for event in ordered:
         if event is created or event["kind"] == REQUEST_CREATED:
             continue
@@ -433,6 +428,5 @@ def request_summary(request: ExpenseRequest) -> dict[str, Any]:
         "status": request.status.value,
         "current_approver_slack_user_ids": approvers,
         "approval_channel_id": request.approval_channel_id,
-        "approval_message_ts": request.approval_message_ts,
         "revision": request.revision,
     }

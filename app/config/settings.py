@@ -11,11 +11,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "Student Expense Support ERP"
-    environment: str = "development"
     slack_bot_token: str = ""
     slack_signing_secret: str = ""
-    slack_ledger_channel_id: str = ""
     bootstrap_system_admin_slack_user_ids: str = ""
 
     @property

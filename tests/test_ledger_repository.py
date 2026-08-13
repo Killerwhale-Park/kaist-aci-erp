@@ -13,7 +13,7 @@ async def test_expense_round_trip_and_history_filtering(slack_client, settings: 
     ledger = SlackLedgerRepository(slack_client, settings)
     created = await ledger.create_request(make_created(2))
     assert created.reference_number == "EXP-TEST-1"
-    assert created.ledger_message_ts
+    assert created.message_ts
 
     own = await ledger.list_for_applicant("U_STUDENT")
     pending = await ledger.list_pending_for_actor("U_APPROVER_1")
@@ -38,7 +38,31 @@ async def test_large_event_is_split_and_reassembled(slack_client, settings: Sett
     assert loaded.purpose == created_data["purpose"]
     thread_messages = [
         item
-        for item in slack_client.messages["C_LEDGER"]
-        if item.get("thread_ts") == created.ledger_message_ts
+        for item in slack_client.messages["C_APPROVAL"]
+        if item.get("thread_ts") == created.message_ts
     ]
     assert len(thread_messages) > 1
+
+
+@pytest.mark.asyncio
+async def test_requests_are_stored_in_each_rules_channel(slack_client, settings: Settings) -> None:
+    ledger = SlackLedgerRepository(slack_client, settings)
+    first_data = make_created(1)
+    second_data = make_created(1)
+    second_data["id"] = "REQ-2"
+    second_data["reference_number"] = "EXP-TEST-2"
+    second_data["approval_channel_id"] = "C_DEPARTMENT_2"
+
+    first = await ledger.create_request(first_data)
+    second = await ledger.create_request(second_data)
+
+    assert first.approval_channel_id == "C_APPROVAL"
+    assert second.approval_channel_id == "C_DEPARTMENT_2"
+    assert any(message["ts"] == first.message_ts for message in slack_client.messages["C_APPROVAL"])
+    assert any(
+        message["ts"] == second.message_ts for message in slack_client.messages["C_DEPARTMENT_2"]
+    )
+    assert {request.id for request in await ledger.list_for_applicant("U_STUDENT")} == {
+        "REQ-1",
+        "REQ-2",
+    }

@@ -20,7 +20,6 @@ class Department:
     id: str
     name_en: str
     name_ko: str
-    approval_channel_id: str | None = None
     is_active: bool = True
 
 
@@ -144,8 +143,7 @@ class ExpenseRequest:
     category: ExpenseCategory
     evidence_submissions: list[EvidenceSubmission] = field(default_factory=list)
     approval_steps: list[ApprovalStep] = field(default_factory=list)
-    approval_message_ts: str | None = None
-    ledger_message_ts: str | None = None
+    message_ts: str | None = None
     revision: int = 1
 
 

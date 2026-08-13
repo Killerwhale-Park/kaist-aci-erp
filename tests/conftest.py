@@ -9,6 +9,7 @@ from app.config.settings import Settings
 class FakeSlackClient:
     def __init__(self) -> None:
         self.messages: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self.private_channels = {"C_APPROVAL", "C_DEPARTMENT_2"}
         self.counter = 0
 
     def _next_ts(self) -> str:
@@ -34,6 +35,15 @@ class FakeSlackClient:
         ]
         return {"ok": True, "messages": sorted(roots, key=lambda item: item["ts"], reverse=True)}
 
+    async def conversations_list(self, **kwargs):
+        return {
+            "ok": True,
+            "channels": [
+                {"id": channel_id, "is_member": True, "is_private": True}
+                for channel_id in sorted(self.private_channels)
+            ],
+        }
+
     async def conversations_replies(self, **kwargs):
         channel_messages = self.messages[kwargs["channel"]]
         selected = [
@@ -48,7 +58,6 @@ class FakeSlackClient:
 def settings() -> Settings:
     return Settings(
         _env_file=None,
-        slack_ledger_channel_id="C_LEDGER",
         bootstrap_system_admin_slack_user_ids="U_ADMIN",
     )
 

@@ -174,9 +174,9 @@ def test_replay_ignores_stale_concurrent_action() -> None:
             "data": {"reason": "late"},
         },
     ]
-    request = replay_events(events, ledger_ts="ROOT")
+    request = replay_events(events, message_ts="ROOT")
     assert request.status == RequestStatus.COMPLETED
-    assert request.ledger_message_ts == "ROOT"
+    assert request.message_ts == "ROOT"
 
 
 def test_workflow_snapshot_is_immutable() -> None:
