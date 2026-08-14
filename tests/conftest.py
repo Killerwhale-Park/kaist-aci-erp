@@ -15,6 +15,9 @@ class FakeSlackClient:
         self.token = f"fake-{uuid4()}"
         self.messages: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.calls: dict[str, int] = defaultdict(int)
+        self.call_order: list[str] = []
+        self.opened_views: dict[str, dict[str, Any]] = {}
+        self.published_views: dict[str, dict[str, Any]] = {}
         self.private_channels = {
             "C_SYSTEM",
             "C_AUDIT",
@@ -48,6 +51,32 @@ class FakeSlackClient:
         message["ts"] = self._next_ts()
         self.messages[kwargs["channel"]].append(message)
         return {"ok": True, "ts": message["ts"], "message": message}
+
+    async def views_open(self, **kwargs):
+        self.calls["views_open"] += 1
+        self.call_order.append("views_open")
+        view_id = f"V{self.calls['views_open']}"
+        self.opened_views[view_id] = kwargs["view"]
+        return {"ok": True, "view": {"id": view_id, **kwargs["view"]}}
+
+    async def views_push(self, **kwargs):
+        self.calls["views_push"] += 1
+        self.call_order.append("views_push")
+        view_id = f"VP{self.calls['views_push']}"
+        self.opened_views[view_id] = kwargs["view"]
+        return {"ok": True, "view": {"id": view_id, **kwargs["view"]}}
+
+    async def views_update(self, **kwargs):
+        self.calls["views_update"] += 1
+        self.call_order.append("views_update")
+        self.opened_views[kwargs["view_id"]] = kwargs["view"]
+        return {"ok": True, "view": {"id": kwargs["view_id"], **kwargs["view"]}}
+
+    async def views_publish(self, **kwargs):
+        self.calls["views_publish"] += 1
+        self.call_order.append("views_publish")
+        self.published_views[kwargs["user_id"]] = kwargs["view"]
+        return {"ok": True, "view": kwargs["view"]}
 
     async def chat_update(self, **kwargs):
         for message in self.messages[kwargs["channel"]]:

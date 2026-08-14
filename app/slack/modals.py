@@ -599,12 +599,27 @@ def configuration_notice_modal(message: str) -> dict:
     return {
         "type": "modal",
         "callback_id": "configuration_notice",
-        "title": {"type": "plain_text", "text": t("administration_title")},
+        "title": {"type": "plain_text", "text": t("status_title")},
         "close": {"type": "plain_text", "text": t("close")},
         "blocks": [
             {
                 "type": "section",
                 "text": {"type": "mrkdwn", "text": message},
+            }
+        ],
+    }
+
+
+def loading_modal(message: str | None = None) -> dict:
+    return {
+        "type": "modal",
+        "callback_id": "loading",
+        "title": {"type": "plain_text", "text": t("loading_title")},
+        "close": {"type": "plain_text", "text": t("close")},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": message or t("loading")},
             }
         ],
     }

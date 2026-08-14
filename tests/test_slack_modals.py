@@ -15,6 +15,7 @@ from app.slack.modals import (
     configuration_notice_modal,
     expense_context_modal,
     expense_details_modal,
+    loading_modal,
     role_configuration_modal,
     system_channels_modal,
 )
@@ -239,3 +240,7 @@ def test_configuration_notice_view_does_not_require_input() -> None:
 
     assert notice["callback_id"] == "configuration_notice"
     assert all(block["type"] != "input" for block in notice["blocks"])
+
+    loading = loading_modal()
+    assert loading["callback_id"] == "loading"
+    assert all(block["type"] != "input" for block in loading["blocks"])

@@ -10,6 +10,7 @@ STRINGS = {
         "승인·결제·정산 등 내가 처리할 일은 ‘내가 처리할 요청’에 표시됩니다."
     ),
     "start_request": "Start / 요청 시작",
+    "refresh": "Refresh / 새로고침",
     "expense_start_help": (
         "*Expense reimbursement / 정산 신청*\n"
         "Use after a payment was made and evidence is ready.\n"
@@ -91,10 +92,10 @@ STRINGS = {
         "설정해야 합니다."
     ),
     "expense_configuration_missing": (
-        "Expense reimbursement is unavailable until an administrator configures approval "
-        "routing. Purchase requests can still be used.\n"
-        "정산 신청은 관리자가 승인 라우팅을 설정한 뒤 사용할 수 있습니다. 구매 요청은 "
-        "현재 사용할 수 있습니다."
+        "You can start an expense form now. The selected budget item must have approval routing "
+        "before it can be submitted.\n"
+        "정산 양식은 바로 작성할 수 있습니다. 단, 제출하려는 재원 항목에는 승인 라우팅이 "
+        "설정되어 있어야 합니다."
     ),
     "operating_channel_missing": (
         "Purchase and assignment requests are unavailable until an operating channel is "
@@ -139,8 +140,8 @@ STRINGS = {
     "coming_soon": "Coming Soon / 준비 중",
     "open": "Open / 신청",
     "my_requests": "My Requests / 내 신청",
-    "my_active_requests": "My Active Requests / 내가 올린 처리 중 요청",
-    "my_action_required": "My Action Items / 내가 처리할 요청",
+    "my_active_requests": "Sent Requests / 내가 보낸 처리 중 요청",
+    "my_action_required": "Received & Action Required / 내가 받은 요청·할 일",
     "no_requests": "No requests yet. / 아직 신청 내역이 없습니다.",
     "no_action_required": "Nothing is waiting for you. / 지금 처리할 요청이 없습니다.",
     "view": "View / 보기",
@@ -284,6 +285,10 @@ STRINGS = {
         "The configuration could not be loaded. Please close this window and try again.\n"
         "설정을 불러오지 못했습니다. 창을 닫고 다시 시도해주세요."
     ),
+    "loading_title": "Loading / 불러오는 중",
+    "loading": "Loading… / 불러오는 중…",
+    "saving": "Saving… / 저장하는 중…",
+    "status_title": "Result / 처리 결과",
     "details_title": "Expense Details / 상세",
     "post_title": "Post Evidence / 사후 증빙",
     "request_details": "Request Details / 신청 상세",

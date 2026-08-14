@@ -142,5 +142,6 @@ def test_home_only_offers_request_types_with_runtime_configuration() -> None:
 
     assert "new_purchase_work_request" in action_ids
     assert "new_settlement_work_request" in action_ids
-    assert "new_expense_request" not in action_ids
+    assert "new_expense_request" in action_ids
+    assert "refresh_home" in action_ids
     assert "승인 라우팅" in page_text

@@ -26,6 +26,12 @@ def app_home_view(
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("home_intro")},
+            "accessory": {
+                "type": "button",
+                "action_id": "refresh_home",
+                "text": {"type": "plain_text", "text": t("refresh")},
+                "value": "refresh",
+            },
         },
         {"type": "divider"},
         {
@@ -34,7 +40,7 @@ def app_home_view(
         },
     ]
 
-    if access.can_request and access.expense_ready:
+    if access.can_request:
         blocks.append(
             _start_action(
                 "new_expense_request",
@@ -149,7 +155,10 @@ _ACTION_PRESENTATION = {
 def _work_queue_section(title: str, items: tuple[WorkItem, ...], empty_key: str) -> list[dict]:
     blocks: list[dict] = [
         {"type": "divider"},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}*"}},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*{title}*  `{len(items)}`"},
+        },
     ]
     if not items:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": t(empty_key)}})

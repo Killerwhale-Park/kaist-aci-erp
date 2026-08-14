@@ -40,7 +40,6 @@ from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest, Us
 from app.domain.work_requests import (
     WORK_APPROVAL_STEP_APPROVED,
     WORK_REQUEST_REJECTED,
-    assert_actor_can_approve_work,
     purchase_created_data,
     settlement_created_data,
 )
@@ -50,7 +49,6 @@ from app.domain.workflow import (
     POST_EVIDENCE_SUBMITTED,
     REQUEST_REJECTED,
     REQUEST_RESUBMITTED,
-    assert_actor_can_approve,
     created_event_data,
     editable_event_data,
     post_evidence_event_data,
@@ -87,6 +85,7 @@ from app.slack.modals import (
     edit_expense_modal,
     expense_context_modal,
     expense_details_modal,
+    loading_modal,
     post_evidence_modal,
     purchase_request_modal,
     request_details_modal,
@@ -169,6 +168,20 @@ def register_handlers(slack_app, database: Database) -> None:
         )
         await client.views_publish(user_id=slack_user_id, view=view)
 
+    async def publish_homes(client, *slack_user_ids: str) -> None:
+        user_ids = sorted({user_id for user_id in slack_user_ids if user_id})
+        results = await asyncio.gather(
+            *(publish_home(client, user_id) for user_id in user_ids),
+            return_exceptions=True,
+        )
+        for user_id, result in zip(user_ids, results, strict=True):
+            if isinstance(result, Exception):
+                logger.error(
+                    "Failed to publish App Home for %s: %s",
+                    user_id,
+                    type(result).__name__,
+                )
+
     async def synchronize_request_message(client, request: ExpenseRequest) -> ExpenseRequest:
         ledger = repository(client)
         text = request_fallback_text(request)
@@ -237,6 +250,46 @@ def register_handlers(slack_app, database: Database) -> None:
             )
             await modal_failure_dm(client, slack_user_id, error_code)
             return None
+
+    async def safe_update_modal(client, view_id: str, view: dict, slack_user_id: str):
+        try:
+            return await client.views_update(view_id=view_id, view=view)
+        except SlackApiError as exc:
+            error_code = str(exc.response.get("error") or "unknown_error")
+            logger.exception("Slack rejected modal update %s: %s", view_id, error_code)
+            await modal_failure_dm(client, slack_user_id, error_code)
+            return None
+
+    def opened_view_id(response) -> str | None:
+        if response is None:
+            return None
+        return (response.get("view") or {}).get("id")
+
+    async def open_loading_view(client, trigger_id: str, slack_user_id: str) -> str | None:
+        response = await safe_open_modal(
+            client,
+            trigger_id,
+            loading_modal(),
+            slack_user_id,
+        )
+        return opened_view_id(response)
+
+    async def push_loading_view(client, trigger_id: str, slack_user_id: str) -> str | None:
+        response = await safe_push_modal(
+            client,
+            trigger_id,
+            loading_modal(),
+            slack_user_id,
+        )
+        return opened_view_id(response)
+
+    async def show_modal_result(client, view_id: str, slack_user_id: str, message: str) -> None:
+        await safe_update_modal(
+            client,
+            view_id,
+            configuration_notice_modal(message),
+            slack_user_id,
+        )
 
     async def send_ephemeral(client, body: dict, text: str, respond=None) -> None:
         try:
@@ -444,8 +497,8 @@ def register_handlers(slack_app, database: Database) -> None:
             ],
         }
 
-    async def open_owned_request_modal(
-        client, trigger_id: str, request_id: str, actor: str, mode: str
+    async def load_owned_request_modal(
+        client, view_id: str, request_id: str, actor: str, mode: str
     ) -> None:
         ledger = repository(client)
         request = await ledger.get_request(request_id)
@@ -484,22 +537,22 @@ def register_handlers(slack_app, database: Database) -> None:
             view = post_evidence_modal(request)
         else:
             view = request_details_modal(request)
-        await safe_open_modal(client, trigger_id, view, actor)
+        await safe_update_modal(client, view_id, view, actor)
 
     @slack_app.command("/expense")
     async def expense_command(ack, body, client):
-        try:
-            await open_new_request(client, body["trigger_id"], body["user_id"])
-        except ApprovalPermissionError:
-            await ack()
-            await safe_dm(client, body["user_id"], t("requester_role_required"))
-            return
         await ack()
+        await open_new_request(client, body["trigger_id"], body["user_id"])
 
     @slack_app.event("app_home_opened")
     async def app_home_opened(event, client):
         if event.get("tab") == "home":
-            await publish_home(client, event["user"])
+            await publish_homes(client, event["user"])
+
+    @slack_app.action("refresh_home")
+    async def refresh_home(ack, body, client):
+        await ack()
+        await publish_homes(client, body["user"]["id"])
 
     @slack_app.action("new_expense_request")
     async def new_expense_request(ack, body, client):
@@ -507,46 +560,35 @@ def register_handlers(slack_app, database: Database) -> None:
         selected_path = (
             (selected_id,) if selected_id and budget_node_by_id(selected_id) is not None else ()
         )
-        try:
-            await open_new_request(
-                client,
-                body["trigger_id"],
-                body["user"]["id"],
-                selected_budget_node_ids=selected_path,
-            )
-        except ApprovalPermissionError:
-            await ack()
-            await safe_dm(client, body["user"]["id"], t("requester_role_required"))
-            return
         await ack()
+        await open_new_request(
+            client,
+            body["trigger_id"],
+            body["user"]["id"],
+            selected_budget_node_ids=selected_path,
+        )
 
     @slack_app.action("new_purchase_work_request")
     async def new_purchase_work_request(ack, body, client):
         actor = body["user"]["id"]
+        await ack()
         await safe_open_modal(
             client,
             body["trigger_id"],
             purchase_request_modal(departments()),
             actor,
         )
-        await ack()
 
     @slack_app.action("new_settlement_work_request")
     async def new_settlement_work_request(ack, body, client):
         actor = body["user"]["id"]
-        try:
-            await repository(client).assert_can_assign_settlement(actor)
-        except ApprovalPermissionError:
-            await ack()
-            await safe_dm(client, actor, t("unauthorized"))
-            return
+        await ack()
         await safe_open_modal(
             client,
             body["trigger_id"],
             settlement_request_modal(departments()),
             actor,
         )
-        await ack()
 
     @slack_app.view("purchase_request_create")
     async def submit_purchase_request(ack, body, client):
@@ -567,9 +609,6 @@ def register_handlers(slack_app, database: Database) -> None:
             department = department_by_id(command.department_id)
             if department is None:
                 raise ConfigurationError
-            ledger = repository(client)
-            await ledger.assert_operating_channel(command.channel_id)
-            await ledger.assert_can_submit_request(actor, command.channel_id)
         except ValidationError as error:
             field_blocks = {
                 "department_id": "work_department",
@@ -599,7 +638,12 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={"work_channel": t("requester_role_required")},
             )
             return
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
+        ledger = repository(client)
         try:
+            await ledger.assert_operating_channel(command.channel_id)
+            await ledger.assert_can_submit_request(actor, command.channel_id)
             policy = work_request_policy(WorkRequestKind.PURCHASE)
             if policy.approval_workflow_id is None:
                 raise ConfigurationError("Purchase approval workflow is not configured")
@@ -611,23 +655,26 @@ def register_handlers(slack_app, database: Database) -> None:
                 },
             )
             if not workflow.is_complete:
-                await ack(
-                    response_action="errors",
-                    errors={"purchase_assignee": t("approval_configuration_required")},
+                await show_modal_result(
+                    client,
+                    view_id,
+                    actor,
+                    t("approval_configuration_required"),
                 )
                 return
-            await ack()
         except EntityNotFoundError:
-            await ack(
-                response_action="errors",
-                errors={"purchase_assignee": t("approval_configuration_required")},
+            await show_modal_result(
+                client,
+                view_id,
+                actor,
+                t("approval_configuration_required"),
             )
             return
         except ConfigurationError:
-            await ack(
-                response_action="errors",
-                errors={"work_channel": t("channel_unavailable")},
-            )
+            await show_modal_result(client, view_id, actor, t("channel_unavailable"))
+            return
+        except ApprovalPermissionError:
+            await show_modal_result(client, view_id, actor, t("requester_role_required"))
             return
 
         try:
@@ -640,7 +687,7 @@ def register_handlers(slack_app, database: Database) -> None:
                 client,
                 f"Purchase request database write failed ({type(error).__name__})",
             )
-            await safe_dm(client, actor, t("submission_error"))
+            await show_modal_result(client, view_id, actor, t("submission_error"))
             return
 
         projection_ok = True
@@ -668,7 +715,16 @@ def register_handlers(slack_app, database: Database) -> None:
             t("purchase_assignment_notice", reference=request.reference_number),
             work_request_blocks(request),
         )
-        await publish_home(client, actor)
+        await show_modal_result(
+            client,
+            view_id,
+            actor,
+            t(
+                "purchase_request_sent" if projection_ok else "request_saved_projection_failed",
+                reference=request.reference_number,
+            ),
+        )
+        await publish_homes(client, actor, request.assignee_slack_user_id)
 
     @slack_app.view("settlement_request_create")
     async def submit_settlement_request(ack, body, client):
@@ -690,9 +746,6 @@ def register_handlers(slack_app, database: Database) -> None:
             department = department_by_id(command.department_id)
             if department is None:
                 raise ConfigurationError
-            ledger = repository(client)
-            await ledger.assert_operating_channel(command.channel_id)
-            await ledger.assert_can_assign_settlement(actor, command.channel_id)
         except ValidationError as error:
             field_blocks = {
                 "department_id": "work_department",
@@ -725,7 +778,18 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={"work_department": t("unauthorized")},
             )
             return
-        await ack()
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
+        ledger = repository(client)
+        try:
+            await ledger.assert_operating_channel(command.channel_id)
+            await ledger.assert_can_assign_settlement(actor, command.channel_id)
+        except ConfigurationError:
+            await show_modal_result(client, view_id, actor, t("channel_unavailable"))
+            return
+        except ApprovalPermissionError:
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
+            return
 
         try:
             request = await ledger.create_work_request(settlement_created_data(command, department))
@@ -735,7 +799,7 @@ def register_handlers(slack_app, database: Database) -> None:
                 client,
                 f"Settlement request database write failed ({type(error).__name__})",
             )
-            await safe_dm(client, actor, t("submission_error"))
+            await show_modal_result(client, view_id, actor, t("submission_error"))
             return
 
         projection_ok = True
@@ -763,11 +827,24 @@ def register_handlers(slack_app, database: Database) -> None:
             t("settlement_assignment_notice", reference=request.reference_number),
             work_request_blocks(request),
         )
-        await publish_home(client, actor)
+        await show_modal_result(
+            client,
+            view_id,
+            actor,
+            t(
+                "settlement_request_sent" if projection_ok else "request_saved_projection_failed",
+                reference=request.reference_number,
+            ),
+        )
+        await publish_homes(client, actor, request.assignee_slack_user_id)
 
     @slack_app.action("view_work_request")
     async def view_work_request(ack, body, client):
         actor = body["user"]["id"]
+        await ack()
+        view_id = await open_loading_view(client, body["trigger_id"], actor)
+        if view_id is None:
+            return
         try:
             ledger = repository(client)
             request = await ledger.get_work_request(body["actions"][0]["value"])
@@ -780,17 +857,14 @@ def register_handlers(slack_app, database: Database) -> None:
             }
             if actor not in allowed:
                 raise ApprovalPermissionError
-            await safe_open_modal(
+            await safe_update_modal(
                 client,
-                body["trigger_id"],
+                view_id,
                 work_request_details_modal(request),
                 actor,
             )
         except (ApprovalPermissionError, EntityNotFoundError):
-            await ack()
-            await safe_dm(client, actor, t("unauthorized"))
-            return
-        await ack()
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
 
     @slack_app.action("approve_work_request")
     async def approve_work_request(ack, body, client, respond):
@@ -803,7 +877,14 @@ def register_handlers(slack_app, database: Database) -> None:
                 actor,
             )
             await synchronize_work_request_message(client, request)
-            await publish_home(client, actor)
+            await publish_homes(
+                client,
+                actor,
+                request.requester_slack_user_id,
+                request.originator_slack_user_id,
+                request.assignee_slack_user_id,
+                *request.current_approver_slack_user_ids,
+            )
             if request.status == WorkRequestStatus.ACTION_REQUIRED:
                 await safe_dm(
                     client,
@@ -819,26 +900,13 @@ def register_handlers(slack_app, database: Database) -> None:
     @slack_app.action("reject_work_request")
     async def reject_work_request(ack, body, client):
         actor = body["user"]["id"]
-        try:
-            request_id = body["actions"][0]["value"]
-            assert_actor_can_approve_work(
-                await repository(client).get_work_request(request_id), actor
-            )
-            await safe_open_modal(
-                client,
-                body["trigger_id"],
-                work_request_rejection_modal(request_id),
-                actor,
-            )
-        except (EntityNotFoundError, InvalidStateTransitionError):
-            await ack()
-            await safe_dm(client, actor, t("invalid_state"))
-            return
-        except ApprovalPermissionError:
-            await ack()
-            await safe_dm(client, actor, t("unauthorized"))
-            return
         await ack()
+        await safe_open_modal(
+            client,
+            body["trigger_id"],
+            work_request_rejection_modal(body["actions"][0]["value"]),
+            actor,
+        )
 
     @slack_app.view("work_request_rejection")
     async def submit_work_request_rejection(ack, body, client):
@@ -851,6 +919,8 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={"decision_reason": t("reason_required")},
             )
             return
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
         try:
             request = await repository(client).append_work_event(
                 metadata["request_id"],
@@ -858,18 +928,11 @@ def register_handlers(slack_app, database: Database) -> None:
                 actor,
                 {"reason": reason},
             )
-            await ack()
         except ApprovalPermissionError:
-            await ack(
-                response_action="errors",
-                errors={"decision_reason": t("unauthorized")},
-            )
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
             return
         except (EntityNotFoundError, InvalidStateTransitionError):
-            await ack(
-                response_action="errors",
-                errors={"decision_reason": t("invalid_state")},
-            )
+            await show_modal_result(client, view_id, actor, t("invalid_state"))
             return
         await synchronize_work_request_message(client, request)
         await safe_dm(
@@ -877,11 +940,27 @@ def register_handlers(slack_app, database: Database) -> None:
             request.requester_slack_user_id,
             t("purchase_rejected", reference=request.reference_number),
         )
-        await publish_home(client, actor)
+        await show_modal_result(
+            client,
+            view_id,
+            actor,
+            t("purchase_rejected", reference=request.reference_number),
+        )
+        await publish_homes(
+            client,
+            actor,
+            request.requester_slack_user_id,
+            request.originator_slack_user_id,
+            request.assignee_slack_user_id,
+        )
 
     @slack_app.action("handoff_purchase_to_settlement")
     async def handoff_purchase_to_settlement(ack, body, client):
         actor = body["user"]["id"]
+        await ack()
+        view_id = await open_loading_view(client, body["trigger_id"], actor)
+        if view_id is None:
+            return
         try:
             request = await repository(client).get_work_request(body["actions"][0]["value"])
             if (
@@ -890,26 +969,21 @@ def register_handlers(slack_app, database: Database) -> None:
                 or request.assignee_slack_user_id != actor
             ):
                 raise ApprovalPermissionError
-            await safe_open_modal(
+            await safe_update_modal(
                 client,
-                body["trigger_id"],
+                view_id,
                 settlement_request_modal(departments(), source_purchase=request),
                 actor,
             )
         except (ApprovalPermissionError, EntityNotFoundError):
-            await ack()
-            await safe_dm(client, actor, t("unauthorized"))
-            return
-        await ack()
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
 
     @slack_app.view("purchase_settlement_handoff")
     async def submit_purchase_settlement_handoff(ack, body, client):
         actor = body["user"]["id"]
         state = body["view"]["state"]
         metadata = json.loads(body["view"]["private_metadata"])
-        ledger = repository(client)
         try:
-            source = await ledger.get_work_request(metadata["source_request_id"])
             command = CreateSettlementRequestCommand(
                 requester_slack_user_id=actor,
                 department_id=state_value(state, "work_department"),
@@ -923,22 +997,8 @@ def register_handlers(slack_app, database: Database) -> None:
                 evidence_folder_url=state_value(state, "work_evidence_folder"),
             )
             department = department_by_id(command.department_id)
-            if (
-                department is None
-                or source.kind != WorkRequestKind.PURCHASE
-                or source.department_id != command.department_id
-                or source.assignee_slack_user_id != actor
-            ):
+            if department is None:
                 raise ConfigurationError
-            await ledger.assert_operating_channel(command.channel_id)
-            await ledger.assert_channel_member(actor, command.channel_id)
-            created_data = settlement_created_data(
-                command,
-                department,
-                originator_slack_user_id=source.originator_slack_user_id,
-                case_id=source.case_id,
-                parent_request_id=source.id,
-            )
         except ValidationError as error:
             field_blocks = {
                 "department_id": "work_department",
@@ -969,7 +1029,29 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={"work_department": t("invalid_state")},
             )
             return
-        await ack()
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
+        ledger = repository(client)
+        try:
+            source = await ledger.get_work_request(metadata["source_request_id"])
+            if (
+                source.kind != WorkRequestKind.PURCHASE
+                or source.department_id != command.department_id
+                or source.assignee_slack_user_id != actor
+            ):
+                raise ConfigurationError
+            await ledger.assert_operating_channel(command.channel_id)
+            await ledger.assert_channel_member(actor, command.channel_id)
+            created_data = settlement_created_data(
+                command,
+                department,
+                originator_slack_user_id=source.originator_slack_user_id,
+                case_id=source.case_id,
+                parent_request_id=source.id,
+            )
+        except (ApprovalPermissionError, ConfigurationError, EntityNotFoundError):
+            await show_modal_result(client, view_id, actor, t("invalid_state"))
+            return
         try:
             source, successor = await ledger.handoff_work_request(source.id, actor, created_data)
         except Exception as error:
@@ -978,7 +1060,7 @@ def register_handlers(slack_app, database: Database) -> None:
                 client,
                 f"Purchase handoff database write failed ({type(error).__name__})",
             )
-            await safe_dm(client, actor, t("submission_error"))
+            await show_modal_result(client, view_id, actor, t("submission_error"))
             return
 
         projection_ok = True
@@ -1005,11 +1087,27 @@ def register_handlers(slack_app, database: Database) -> None:
             t("settlement_assignment_notice", reference=successor.reference_number),
             work_request_blocks(successor),
         )
-        await publish_home(client, actor)
+        await show_modal_result(
+            client,
+            view_id,
+            actor,
+            t("settlement_request_sent", reference=successor.reference_number),
+        )
+        await publish_homes(
+            client,
+            actor,
+            source.requester_slack_user_id,
+            source.originator_slack_user_id,
+            successor.assignee_slack_user_id,
+        )
 
     @slack_app.action("start_assigned_settlement")
     async def start_assigned_settlement(ack, body, client):
         actor = body["user"]["id"]
+        await ack()
+        view_id = await open_loading_view(client, body["trigger_id"], actor)
+        if view_id is None:
+            return
         try:
             request = await repository(client).get_work_request(body["actions"][0]["value"])
             if actor != request.assignee_slack_user_id:
@@ -1020,21 +1118,24 @@ def register_handlers(slack_app, database: Database) -> None:
             }:
                 raise InvalidStateTransitionError
         except (ApprovalPermissionError, EntityNotFoundError):
-            await ack()
-            await safe_dm(client, actor, t("unauthorized"))
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
             return
         except InvalidStateTransitionError:
-            await ack()
-            await safe_dm(client, actor, t("invalid_state"))
+            await show_modal_result(client, view_id, actor, t("invalid_state"))
             return
-        await open_new_request(
+        await safe_update_modal(
             client,
-            body["trigger_id"],
+            view_id,
+            expense_context_modal(
+                actor,
+                departments(),
+                budget_nodes(),
+                category_node_ids=(item.id for item in categories()),
+                initial_department_id=request.department_id,
+                source_work_request_id=request.slack_locator,
+            ),
             actor,
-            initial_department_id=request.department_id,
-            source_work_request_id=request.slack_locator,
         )
-        await ack()
 
     @slack_app.action("complete_work_request")
     async def complete_work_request(ack, body, client):
@@ -1054,16 +1155,23 @@ def register_handlers(slack_app, database: Database) -> None:
         await safe_dm(
             client, actor, t("work_request_completed", reference=request.reference_number)
         )
+        await publish_homes(
+            client,
+            actor,
+            request.requester_slack_user_id,
+            request.originator_slack_user_id,
+            request.assignee_slack_user_id,
+        )
 
     @slack_app.action("applicant_type_changed")
     async def applicant_type_changed(ack, body, client):
         selected_type = ApplicantType(body["actions"][0]["selected_option"]["value"])
+        await ack()
         await client.views_update(
             view_id=body["view"]["id"],
             hash=body["view"]["hash"],
             view=expense_context_from_state(body, selected_applicant_type=selected_type),
         )
-        await ack()
 
     @slack_app.action("budget_node_selected")
     async def budget_node_selected(ack, body, client):
@@ -1071,12 +1179,12 @@ def register_handlers(slack_app, database: Database) -> None:
         level = int(action["block_id"].removeprefix("budget_level_"))
         current_path = selected_budget_node_ids(body["view"]["state"])
         selected_path = current_path[: level - 1] + (action["selected_option"]["value"],)
+        await ack()
         await client.views_update(
             view_id=body["view"]["id"],
             hash=body["view"]["hash"],
             view=expense_context_from_state(body, selected_path=selected_path),
         )
-        await ack()
 
     @slack_app.view("expense_context")
     async def submit_expense_context(ack, body, client):
@@ -1122,28 +1230,28 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={budget_error_block: t("configuration_error")},
             )
             return
+        actor = body["user"]["id"]
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal())
         ledger = repository(client)
         try:
             rule = await ledger.get_rule(department_id, category_id)
             if not rule.approval_channel_id:
                 raise ConfigurationError
-            await ledger.assert_can_submit_request(body["user"]["id"], rule.approval_channel_id)
-        except ApprovalPermissionError:
-            await ack(
-                response_action="errors",
-                errors={"department": t("requester_role_required")},
-            )
-            return
         except (ConfigurationError, EntityNotFoundError):
-            await ack(
-                response_action="errors",
-                errors={budget_error_block: t("approval_configuration_required")},
+            await show_modal_result(
+                client,
+                view_id,
+                actor,
+                t("approval_configuration_required"),
             )
             return
         if not rule.is_complete:
-            await ack(
-                response_action="errors",
-                errors={budget_error_block: t("approval_configuration_required")},
+            await show_modal_result(
+                client,
+                view_id,
+                actor,
+                t("approval_configuration_required"),
             )
             return
         source_work_request = None
@@ -1155,15 +1263,18 @@ def register_handlers(slack_app, database: Database) -> None:
                     source_work_request.kind != WorkRequestKind.SETTLEMENT
                     or source_work_request.status
                     not in {WorkRequestStatus.ACTION_REQUIRED, WorkRequestStatus.OPEN}
-                    or source_work_request.assignee_slack_user_id != body["user"]["id"]
+                    or source_work_request.assignee_slack_user_id != actor
                     or source_work_request.department_id != department_id
                 ):
                     raise ApprovalPermissionError
             except (ApprovalPermissionError, EntityNotFoundError):
-                await ack(
-                    response_action="errors",
-                    errors={budget_error_block: t("invalid_state")},
-                )
+                await show_modal_result(client, view_id, actor, t("invalid_state"))
+                return
+        else:
+            try:
+                await ledger.assert_can_submit_request(actor, rule.approval_channel_id)
+            except ApprovalPermissionError:
+                await show_modal_result(client, view_id, actor, t("requester_role_required"))
                 return
         context = {
             "department_id": department_id,
@@ -1182,13 +1293,15 @@ def register_handlers(slack_app, database: Database) -> None:
                 else {}
             ),
         }
-        await ack(
-            response_action="update",
-            view=expense_details_modal(
+        await safe_update_modal(
+            client,
+            view_id,
+            expense_details_modal(
                 context,
                 list(category.evidence_requirements),
                 source_work_request,
             ),
+            actor,
         )
 
     @slack_app.view("expense_details")
@@ -1227,7 +1340,6 @@ def register_handlers(slack_app, database: Database) -> None:
             if context.get("source_work_request_id"):
                 created["source_work_request_id"] = context["source_work_request_id"]
                 created["case_id"] = context.get("case_id")
-            await ack()
         except ValidationError as error:
             await ack(response_action="errors", errors=pydantic_errors(error))
             return
@@ -1238,6 +1350,8 @@ def register_handlers(slack_app, database: Database) -> None:
             await ack(response_action="errors", errors={"purpose": t("configuration_error")})
             return
 
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
         ledger = repository(client)
         try:
             request = await ledger.create_request(created)
@@ -1247,7 +1361,7 @@ def register_handlers(slack_app, database: Database) -> None:
                 client,
                 f"Expense request database write failed ({type(error).__name__})",
             )
-            await safe_dm(client, actor, t("submission_error"))
+            await show_modal_result(client, view_id, actor, t("submission_error"))
             return
 
         projection_ok = True
@@ -1272,6 +1386,7 @@ def register_handlers(slack_app, database: Database) -> None:
         if warning_links:
             confirmation += f"\n\n{t('non_drive_warning')}"
         await safe_dm(client, actor, confirmation)
+        await show_modal_result(client, view_id, actor, confirmation)
         await notify_after_transition(client, request)
         source_work_request_id = context.get("source_work_request_id")
         if source_work_request_id:
@@ -1290,7 +1405,11 @@ def register_handlers(slack_app, database: Database) -> None:
                     f"Expense request {request.reference_number} assignment completion failed "
                     f"({type(error).__name__})",
                 )
-        await publish_home(client, actor)
+        await publish_homes(
+            client,
+            actor,
+            *request.current_approver_slack_user_ids,
+        )
 
     @slack_app.action("approve_request")
     async def approve_request(ack, body, client, respond):
@@ -1309,24 +1428,23 @@ def register_handlers(slack_app, database: Database) -> None:
             return
         request = await synchronize_request_message(client, request)
         await notify_after_transition(client, request)
-        await publish_home(client, actor)
+        await publish_homes(
+            client,
+            actor,
+            request.applicant_slack_user_id,
+            *request.current_approver_slack_user_ids,
+        )
 
     async def open_decision(ack, body, client, respond, decision: str) -> None:
         request_id = body["actions"][0]["value"]
         actor = body["user"]["id"]
-        try:
-            assert_actor_can_approve(await repository(client).get_request(request_id), actor)
-        except (ApprovalPermissionError, InvalidStateTransitionError):
-            await ack()
-            await send_ephemeral(client, body, t("unauthorized"), respond)
-            return
+        await ack()
         await safe_open_modal(
             client,
             body["trigger_id"],
             approval_decision_modal(request_id, decision),
             actor,
         )
-        await ack()
 
     @slack_app.action("request_changes")
     async def request_changes_action(ack, body, client, respond):
@@ -1342,41 +1460,55 @@ def register_handlers(slack_app, database: Database) -> None:
         reason = state_value(body["view"]["state"], "decision_reason") or ""
         actor = body["user"]["id"]
         kind = CHANGES_REQUESTED if metadata["decision"] == "changes" else REQUEST_REJECTED
+        if not reason.strip():
+            await ack(response_action="errors", errors={"decision_reason": t("reason_required")})
+            return
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
         try:
             request = await repository(client).append_event(
                 metadata["request_id"], kind, actor, {"reason": reason}
             )
-            await ack()
         except DomainValidationError:
-            await ack(response_action="errors", errors={"decision_reason": t("reason_required")})
+            await show_modal_result(client, view_id, actor, t("reason_required"))
             return
         except ApprovalPermissionError:
-            await ack(response_action="errors", errors={"decision_reason": t("unauthorized")})
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
             return
         except InvalidStateTransitionError:
-            await ack(response_action="errors", errors={"decision_reason": t("invalid_state")})
+            await show_modal_result(client, view_id, actor, t("invalid_state"))
             return
         request = await synchronize_request_message(client, request)
         await notify_after_transition(client, request, reason)
-        await publish_home(client, actor)
+        await show_modal_result(
+            client,
+            view_id,
+            actor,
+            t("request_updated", reference=request.reference_number),
+        )
+        await publish_homes(client, actor, request.applicant_slack_user_id)
 
     async def open_request_action(ack, body, client, mode: str):
         actor = body["user"]["id"]
+        await ack()
+        view_id = await open_loading_view(client, body["trigger_id"], actor)
+        if view_id is None:
+            return
         try:
-            await open_owned_request_modal(
-                client, body["trigger_id"], body["actions"][0]["value"], actor, mode
+            await load_owned_request_modal(
+                client, view_id, body["actions"][0]["value"], actor, mode
             )
         except ApprovalPermissionError:
-            await ack()
-            await safe_dm(
-                client, actor, t("not_applicant") if mode != "view" else t("unauthorized")
+            await show_modal_result(
+                client,
+                view_id,
+                actor,
+                t("not_applicant") if mode != "view" else t("unauthorized"),
             )
             return
         except (InvalidStateTransitionError, EntityNotFoundError):
-            await ack()
-            await safe_dm(client, actor, t("invalid_state"))
+            await show_modal_result(client, view_id, actor, t("invalid_state"))
             return
-        await ack()
 
     @slack_app.action("view_request")
     async def view_request_action(ack, body, client):
@@ -1396,24 +1528,26 @@ def register_handlers(slack_app, database: Database) -> None:
         actor = body["user"]["id"]
         try:
             command = editable_command(body["view"]["state"])
-            request = await repository(client).append_event(
-                metadata["request_id"],
-                REQUEST_RESUBMITTED,
-                actor,
-                editable_event_data(command),
-            )
-            await ack()
         except ValidationError as error:
             await ack(response_action="errors", errors=pydantic_errors(error))
             return
         except DomainValidationError as error:
             await ack(response_action="errors", errors=domain_errors(error))
             return
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
+        try:
+            request = await repository(client).append_event(
+                metadata["request_id"],
+                REQUEST_RESUBMITTED,
+                actor,
+                editable_event_data(command),
+            )
         except ApprovalPermissionError:
-            await ack(response_action="errors", errors={"purpose": t("not_applicant")})
+            await show_modal_result(client, view_id, actor, t("not_applicant"))
             return
         except InvalidStateTransitionError:
-            await ack(response_action="errors", errors={"purpose": t("invalid_state")})
+            await show_modal_result(client, view_id, actor, t("invalid_state"))
             return
         request = await synchronize_request_message(client, request)
         await notify_after_transition(client, request)
@@ -1421,7 +1555,13 @@ def register_handlers(slack_app, database: Database) -> None:
             [command.evidence_folder_url] + [item.url for item in command.evidence.values()]
         ):
             await safe_dm(client, actor, t("non_drive_warning"))
-        await publish_home(client, actor)
+        await show_modal_result(
+            client,
+            view_id,
+            actor,
+            t("request_updated", reference=request.reference_number),
+        )
+        await publish_homes(client, actor, *request.current_approver_slack_user_ids)
 
     @slack_app.view("post_evidence")
     async def submit_post_evidence(ack, body, client):
@@ -1437,64 +1577,73 @@ def register_handlers(slack_app, database: Database) -> None:
         )
         try:
             command = PostEvidenceCommand(evidence=evidence_from_state(body["view"]["state"]))
+        except (ValidationError, DomainValidationError):
+            await ack(response_action="errors", errors={fallback: t("validation_error")})
+            return
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
+        try:
             request = await repository(client).append_event(
                 metadata["request_id"],
                 POST_EVIDENCE_SUBMITTED,
                 actor,
                 post_evidence_event_data(command),
             )
-            await ack()
-        except (ValidationError, DomainValidationError):
-            await ack(response_action="errors", errors={fallback: t("validation_error")})
-            return
         except ApprovalPermissionError:
-            await ack(response_action="errors", errors={fallback: t("not_applicant")})
+            await show_modal_result(client, view_id, actor, t("not_applicant"))
             return
         except InvalidStateTransitionError:
-            await ack(response_action="errors", errors={fallback: t("invalid_state")})
+            await show_modal_result(client, view_id, actor, t("invalid_state"))
             return
         request = await synchronize_request_message(client, request)
         await notify_after_transition(client, request)
         if drive_warning_urls([item.url for item in command.evidence.values()]):
             await safe_dm(client, actor, t("non_drive_warning"))
-        await publish_home(client, actor)
+        await show_modal_result(
+            client,
+            view_id,
+            actor,
+            t("request_updated", reference=request.reference_number),
+        )
+        await publish_homes(client, actor, *request.current_approver_slack_user_ids)
 
     @slack_app.action("manage_rules")
     async def manage_rules_action(ack, body, client):
         actor = body["user"]["id"]
+        await ack()
         opened = await safe_open_modal(
             client,
             body["trigger_id"],
             administration_modal(),
             actor,
         )
-        await ack()
         if opened is None:
             return
 
     @slack_app.action("configure_system_channels")
     async def configure_system_channels_action(ack, body, client):
         actor = body["user"]["id"]
+        await ack()
+        view_id = await push_loading_view(client, body["trigger_id"], actor)
+        if view_id is None:
+            return
         try:
             ledger = repository(client)
             await ledger.assert_system_admin(actor)
             channel_configuration = await ledger.system_channels()
         except ApprovalPermissionError:
-            await ack()
-            await safe_dm(client, actor, t("unauthorized"))
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
             return
         except (ConfigurationError, SlackApiError):
             logger.exception("Failed to load system channel configuration")
-            await ack()
-            await safe_dm(client, actor, t("configuration_load_error"))
+            await show_modal_result(client, view_id, actor, t("configuration_load_error"))
             return
-        await safe_push_modal(
+        await safe_update_modal(
             client,
-            body["trigger_id"],
+            view_id,
             system_channels_modal(channel_configuration),
             actor,
         )
-        await ack()
 
     @slack_app.view("system_channels_editor")
     async def submit_system_channels_editor(ack, body, client):
@@ -1503,6 +1652,20 @@ def register_handlers(slack_app, database: Database) -> None:
         alerts_channel_id = state_value(state, "alerts_channel")
         additional = state_selected_conversations(state, "additional_operating_channels")
         actor = body["user"]["id"]
+        if (
+            not audit_channel_id
+            or not alerts_channel_id
+            or audit_channel_id == alerts_channel_id
+            or audit_channel_id in additional
+            or alerts_channel_id in additional
+        ):
+            await ack(
+                response_action="errors",
+                errors={"audit_channel": t("system_channels_error")},
+            )
+            return
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
         try:
             await repository(client).replace_system_channels(
                 actor,
@@ -1511,31 +1674,25 @@ def register_handlers(slack_app, database: Database) -> None:
                 additional_operating_channel_ids=additional,
             )
         except ApprovalPermissionError:
-            await ack(
-                response_action="errors",
-                errors={"audit_channel": t("unauthorized")},
-            )
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
             return
         except ConfigurationError:
-            await ack(
-                response_action="errors",
-                errors={"audit_channel": t("system_channels_error")},
-            )
+            await show_modal_result(client, view_id, actor, t("system_channels_error"))
             return
-        await ack()
         await safe_dm(client, actor, t("system_channels_saved"))
-        await publish_home(client, actor)
+        await show_modal_result(client, view_id, actor, t("system_channels_saved"))
+        await publish_homes(client, actor)
 
     @slack_app.action("configure_approval_rules")
     async def configure_approval_rules_action(ack, body, client):
         actor = body["user"]["id"]
+        await ack()
         pushed = await safe_push_modal(
             client,
             body["trigger_id"],
             approval_rule_selector_modal(departments(), categories()),
             actor,
         )
-        await ack()
         if pushed is None:
             return
 
@@ -1548,30 +1705,27 @@ def register_handlers(slack_app, database: Database) -> None:
         if not department_id or not category_id:
             await ack(response_action="errors", errors={"rule_category": t("validation_error")})
             return
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal())
         try:
             ledger = repository(client)
             await ledger.assert_system_admin(actor)
             rule = await ledger.get_rule(department_id, category_id)
         except ApprovalPermissionError:
-            await ack(response_action="update", view=configuration_notice_modal(t("unauthorized")))
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
             return
         except EntityNotFoundError:
-            await ack(
-                response_action="update",
-                view=configuration_notice_modal(t("approval_configuration_required")),
-            )
+            await show_modal_result(client, view_id, actor, t("approval_configuration_required"))
             return
         except (ConfigurationError, SlackApiError):
             logger.exception("Failed to load approval rule %s:%s", department_id, category_id)
-            await ack(
-                response_action="update",
-                view=configuration_notice_modal(t("configuration_load_error")),
-            )
+            await show_modal_result(client, view_id, actor, t("configuration_load_error"))
             return
 
-        await ack(
-            response_action="update",
-            view=approval_rule_editor_modal(
+        await safe_update_modal(
+            client,
+            view_id,
+            approval_rule_editor_modal(
                 department_id,
                 category_id,
                 rule.approval_channel_id if rule else None,
@@ -1591,6 +1745,7 @@ def register_handlers(slack_app, database: Database) -> None:
                     else []
                 ),
             ),
+            actor,
         )
 
     @slack_app.view("approval_rule_editor")
@@ -1605,6 +1760,8 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={"approval_channel": t("channel_membership_error")},
             )
             return
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
         try:
             saved = await repository(client).save_approval_route(
                 actor,
@@ -1613,42 +1770,41 @@ def register_handlers(slack_app, database: Database) -> None:
                 channel_id,
             )
         except (ApprovalPermissionError, ConfigurationError, EntityNotFoundError):
-            await ack(
-                response_action="errors",
-                errors={"approval_channel": t("configuration_error")},
-            )
+            await show_modal_result(client, view_id, actor, t("configuration_error"))
             return
-        await ack()
+        result_message = t("rule_saved_incomplete") if not saved.is_complete else t("rule_saved")
         await safe_dm(
             client,
             actor,
-            t("rule_saved_incomplete") if not saved.is_complete else t("rule_saved"),
+            result_message,
         )
-        await publish_home(client, actor)
+        await show_modal_result(client, view_id, actor, result_message)
+        await publish_homes(client, actor)
 
     @slack_app.action("configure_access_roles")
     async def configure_access_roles_action(ack, body, client):
         actor = body["user"]["id"]
+        await ack()
+        view_id = await push_loading_view(client, body["trigger_id"], actor)
+        if view_id is None:
+            return
         try:
             ledger = repository(client)
             await ledger.assert_system_admin(actor)
             assignments = await ledger.role_assignments()
         except ApprovalPermissionError:
-            await ack()
-            await safe_dm(client, actor, t("unauthorized"))
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
             return
         except (ConfigurationError, SlackApiError):
             logger.exception("Failed to load access role configuration")
-            await ack()
-            await safe_dm(client, actor, t("configuration_load_error"))
+            await show_modal_result(client, view_id, actor, t("configuration_load_error"))
             return
-        await safe_push_modal(
+        await safe_update_modal(
             client,
-            body["trigger_id"],
+            view_id,
             role_configuration_modal(assignments),
             actor,
         )
-        await ack()
 
     @slack_app.view("access_roles_editor")
     async def submit_access_roles_editor(ack, body, client):
@@ -1671,20 +1827,16 @@ def register_handlers(slack_app, database: Database) -> None:
             )
             return
         actor = body["user"]["id"]
+        view_id = body["view"]["id"]
+        await ack(response_action="update", view=loading_modal(t("saving")))
         try:
             await repository(client).replace_role_assignments(actor, assignments)
         except ApprovalPermissionError:
-            await ack(
-                response_action="errors",
-                errors={"access_role__workspace__SYSTEM_ADMIN": t("unauthorized")},
-            )
+            await show_modal_result(client, view_id, actor, t("unauthorized"))
             return
         except ConfigurationError:
-            await ack(
-                response_action="errors",
-                errors={"access_role__workspace__SYSTEM_ADMIN": t("configuration_error")},
-            )
+            await show_modal_result(client, view_id, actor, t("configuration_error"))
             return
-        await ack()
         await safe_dm(client, actor, t("roles_saved"))
-        await publish_home(client, actor)
+        await show_modal_result(client, view_id, actor, t("roles_saved"))
+        await publish_homes(client, actor)
