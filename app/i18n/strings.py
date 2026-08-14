@@ -4,10 +4,10 @@ STRINGS = {
     "new_request_short": "New Expense / 새 신청",
     "home_intro": (
         "*What do you need to do? / 어떤 일을 시작하나요?*\n"
-        "Start a request here, then track it under My Active Requests. "
-        "Items waiting for your approval or follow-up appear under My Action Items.\n"
-        "여기서 요청을 시작하고, 진행 상황은 ‘내가 올린 처리 중 요청’에서 확인하세요. "
-        "승인·결제·정산 등 내가 처리할 일은 ‘내가 처리할 요청’에 표시됩니다."
+        "Start a request here, then track it under Sent Requests. "
+        "Assigned work and approvals appear under Received & Action Required.\n"
+        "여기서 요청을 시작하고, 진행 상황은 ‘내가 보낸 처리 중 요청’에서 확인하세요. "
+        "배정받은 업무와 승인 요청은 ‘내가 받은 요청·할 일’에 표시됩니다."
     ),
     "start_request": "Start / 요청 시작",
     "refresh": "Refresh / 새로고침",
