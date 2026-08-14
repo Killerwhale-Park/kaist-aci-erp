@@ -1,4 +1,13 @@
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
 from app.database import normalize_database_url
+from app.ledger.schema import REQUIRED_DATABASE_REVISION
+
+
+def test_required_database_revision_matches_alembic_head() -> None:
+    scripts = ScriptDirectory.from_config(Config("alembic.ini"))
+    assert REQUIRED_DATABASE_REVISION == scripts.get_current_head()
 
 
 def test_database_urls_use_async_drivers() -> None:

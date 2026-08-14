@@ -4,6 +4,7 @@ from sqlalchemy import text
 
 from app.config.settings import get_settings
 from app.database import Database
+from app.ledger.schema import REQUIRED_DATABASE_REVISION
 from app.slack.app import create_slack_app
 
 settings = get_settings()
@@ -26,9 +27,11 @@ async def ready() -> dict[str, str]:
         return {"status": "configuration_required"}
     try:
         async with database.session() as session:
-            await session.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
+            revision = await session.scalar(text("SELECT version_num FROM alembic_version LIMIT 1"))
     except Exception:
         return {"status": "database_unavailable"}
+    if revision != REQUIRED_DATABASE_REVISION:
+        return {"status": "migration_required"}
     return {"status": "ok"}
 
 
