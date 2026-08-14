@@ -37,10 +37,14 @@ SLACK_SIGNING_SECRET=...
 DATABASE_URL=postgresql://...
 ```
 
-Neon/Vercel 연동이 `DATABASE_URL`을 자동으로 추가합니다. 런타임에는 pooled URL을 사용하고, Alembic 실행에는 가능하면 Neon의 unpooled URL을 사용합니다.
+Neon/Vercel 연동이 Vercel의 `DATABASE_URL`을 자동으로 추가합니다. 최초 DB 생성 때는 Neon의 **Connect → Direct connection** 문자열을 로컬 `.env`의 `DATABASE_URL`에도 넣고 마이그레이션을 한 번 실행합니다.
+
+```text
+# .env (Git에 포함되지 않음)
+DATABASE_URL=postgresql://...
+```
 
 ```powershell
-$env:DATABASE_URL_UNPOOLED="postgresql://..."
 .venv\Scripts\alembic upgrade head
 ```
 

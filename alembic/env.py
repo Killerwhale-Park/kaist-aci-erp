@@ -8,6 +8,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from app.config.settings import get_settings
 from app.database import normalize_database_url
 from app.ledger.tables import Base
 
@@ -19,7 +20,11 @@ target_metadata = Base.metadata
 
 
 def database_url() -> str:
-    value = os.getenv("DATABASE_URL_UNPOOLED") or os.getenv("DATABASE_URL") or ""
+    value = (
+        os.getenv("DATABASE_URL_UNPOOLED")
+        or os.getenv("DATABASE_URL")
+        or get_settings().database_url
+    )
     return normalize_database_url(value)
 
 
