@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -60,6 +61,10 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
+    if sys.platform == "win32":
+        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            runner.run(run_async_migrations())
+        return
     asyncio.run(run_async_migrations())
 
 
