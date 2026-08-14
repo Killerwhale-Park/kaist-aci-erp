@@ -193,7 +193,7 @@ def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
     editor_elements = [block.get("element") for block in editor["blocks"] if block.get("element")]
     assert any(element["type"] == "conversations_select" for element in editor_elements)
     role_inputs = [block for block in roles["blocks"] if block["type"] == "input"]
-    assert len(role_inputs) == 4
+    assert len(role_inputs) == 5
     assert all(block["element"]["type"] == "multi_users_select" for block in role_inputs)
     assert [block["element"]["type"] for block in channels["blocks"] if "element" in block] == [
         "conversations_select",

@@ -7,14 +7,21 @@ from pydantic import ValidationError
 from slack_sdk.errors import SlackApiError
 
 from app.application.work_items import build_user_work_queue
-from app.config.roles import SYSTEM_ADMIN_ROLE, WORKSPACE_ROLE_SCOPE, role_definitions
+from app.config.roles import (
+    ASSIGN_SETTLEMENT,
+    MANAGE_CONFIGURATION,
+    SUBMIT_REQUEST,
+    SYSTEM_ADMIN_ROLE,
+    WORKSPACE_ROLE_SCOPE,
+    assigned_users_with_capability,
+    role_definitions,
+)
 from app.config.work_request_policies import work_request_policy
 from app.database import Database
 from app.domain.catalog import (
     budget_by_id,
     budget_node_by_id,
     budget_nodes,
-    budgets,
     categories,
     category_by_id,
     category_for_budget_node,
@@ -64,7 +71,7 @@ from app.expenses.schemas import (
 )
 from app.i18n import t
 from app.ledger import LedgerRepository
-from app.slack.home import app_home_view
+from app.slack.home import HomeCapabilities, app_home_view
 from app.slack.messages import (
     request_fallback_text,
     request_message_blocks,
@@ -121,20 +128,24 @@ def register_handlers(slack_app, database: Database) -> None:
     async def publish_home(client, slack_user_id: str) -> None:
         ledger = repository(client)
         (
-            admins,
-            settlement_assigners,
+            assignments,
+            submission_configuration,
             own_expenses,
             pending_expense_approvals,
             submitted_work_requests,
             actionable_work_requests,
         ) = await asyncio.gather(
-            ledger.system_admin_ids(),
-            ledger.settlement_assigner_ids(),
+            ledger.role_assignments(),
+            ledger.submission_configuration(),
             ledger.list_active_for_applicant(slack_user_id),
             ledger.list_pending_for_actor(slack_user_id),
             ledger.list_active_work_for_user(slack_user_id),
             ledger.list_actionable_work_for_actor(slack_user_id),
         )
+        admins = assigned_users_with_capability(assignments, MANAGE_CONFIGURATION)
+        settlement_assigners = assigned_users_with_capability(assignments, ASSIGN_SETTLEMENT)
+        requesters = assigned_users_with_capability(assignments, SUBMIT_REQUEST)
+        purchase_ready, expense_ready = submission_configuration
         profile = UserProfile(
             slack_user_id=slack_user_id,
             role=(UserRole.SYSTEM_ADMIN if slack_user_id in admins else UserRole.REQUESTER),
@@ -148,10 +159,13 @@ def register_handlers(slack_app, database: Database) -> None:
         )
         view = app_home_view(
             profile,
-            budgets(),
             work_queue,
-            slack_user_id in settlement_assigners,
-            can_submit_requests=True,
+            HomeCapabilities(
+                can_request=slack_user_id in requesters,
+                expense_ready=expense_ready,
+                purchase_ready=purchase_ready,
+                can_assign_settlement=slack_user_id in settlement_assigners,
+            ),
         )
         await client.views_publish(user_id=slack_user_id, view=view)
 
@@ -553,7 +567,9 @@ def register_handlers(slack_app, database: Database) -> None:
             department = department_by_id(command.department_id)
             if department is None:
                 raise ConfigurationError
-            await repository(client).assert_channel_member(actor, command.channel_id)
+            ledger = repository(client)
+            await ledger.assert_operating_channel(command.channel_id)
+            await ledger.assert_can_submit_request(actor, command.channel_id)
         except ValidationError as error:
             field_blocks = {
                 "department_id": "work_department",
@@ -574,17 +590,16 @@ def register_handlers(slack_app, database: Database) -> None:
         except ConfigurationError:
             await ack(
                 response_action="errors",
-                errors={"work_department": t("configuration_error")},
+                errors={"work_channel": t("channel_unavailable")},
             )
             return
         except ApprovalPermissionError:
             await ack(
                 response_action="errors",
-                errors={"work_department": t("requester_role_required")},
+                errors={"work_channel": t("requester_role_required")},
             )
             return
         try:
-            ledger = repository(client)
             policy = work_request_policy(WorkRequestKind.PURCHASE)
             if policy.approval_workflow_id is None:
                 raise ConfigurationError("Purchase approval workflow is not configured")
@@ -601,10 +616,7 @@ def register_handlers(slack_app, database: Database) -> None:
                     errors={"purchase_assignee": t("approval_configuration_required")},
                 )
                 return
-            request = await ledger.create_work_request(
-                purchase_created_data(command, department, workflow)
-            )
-            request = await synchronize_work_request_message(client, request)
+            await ack()
         except EntityNotFoundError:
             await ack(
                 response_action="errors",
@@ -617,22 +629,46 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={"work_channel": t("channel_unavailable")},
             )
             return
-        except Exception:
-            logger.exception("Failed to create a purchase request")
-            await safe_alert(client, "Purchase request persistence failed")
-            await ack(
-                response_action="errors",
-                errors={"work_channel": t("submission_error")},
+
+        try:
+            request = await ledger.create_work_request(
+                purchase_created_data(command, department, workflow)
             )
+        except Exception as error:
+            logger.exception("Failed to create a purchase request")
+            await safe_alert(
+                client,
+                f"Purchase request database write failed ({type(error).__name__})",
+            )
+            await safe_dm(client, actor, t("submission_error"))
             return
-        await ack()
-        await safe_dm(client, actor, t("purchase_request_sent", reference=request.reference_number))
+
+        projection_ok = True
+        try:
+            request = await synchronize_work_request_message(client, request)
+        except Exception as error:
+            projection_ok = False
+            logger.exception("Purchase request saved but Slack projection failed")
+            await safe_alert(
+                client,
+                f"Purchase request {request.reference_number} Slack projection failed "
+                f"({type(error).__name__})",
+            )
+        await safe_dm(
+            client,
+            actor,
+            t(
+                "purchase_request_sent" if projection_ok else "request_saved_projection_failed",
+                reference=request.reference_number,
+            ),
+        )
         await safe_dm(
             client,
             request.assignee_slack_user_id,
             t("purchase_assignment_notice", reference=request.reference_number),
             work_request_blocks(request),
         )
+        await publish_home(client, actor)
 
     @slack_app.view("settlement_request_create")
     async def submit_settlement_request(ack, body, client):
@@ -654,7 +690,9 @@ def register_handlers(slack_app, database: Database) -> None:
             department = department_by_id(command.department_id)
             if department is None:
                 raise ConfigurationError
-            await repository(client).assert_can_assign_settlement(actor, command.channel_id)
+            ledger = repository(client)
+            await ledger.assert_operating_channel(command.channel_id)
+            await ledger.assert_can_assign_settlement(actor, command.channel_id)
         except ValidationError as error:
             field_blocks = {
                 "department_id": "work_department",
@@ -678,42 +716,46 @@ def register_handlers(slack_app, database: Database) -> None:
         except ConfigurationError:
             await ack(
                 response_action="errors",
-                errors={"work_department": t("configuration_error")},
-            )
-            return
-        except ApprovalPermissionError:
-            await ack(
-                response_action="errors",
-                errors={"work_department": t("unauthorized")},
-            )
-            return
-        try:
-            ledger = repository(client)
-            request = await ledger.create_work_request(settlement_created_data(command, department))
-            request = await synchronize_work_request_message(client, request)
-        except ApprovalPermissionError:
-            await ack(
-                response_action="errors",
-                errors={"work_department": t("unauthorized")},
-            )
-            return
-        except ConfigurationError:
-            await ack(
-                response_action="errors",
                 errors={"work_channel": t("channel_unavailable")},
             )
             return
-        except Exception:
-            logger.exception("Failed to create a settlement request")
-            await safe_alert(client, "Settlement request persistence failed")
+        except ApprovalPermissionError:
             await ack(
                 response_action="errors",
-                errors={"work_channel": t("submission_error")},
+                errors={"work_department": t("unauthorized")},
             )
             return
         await ack()
+
+        try:
+            request = await ledger.create_work_request(settlement_created_data(command, department))
+        except Exception as error:
+            logger.exception("Failed to create a settlement request")
+            await safe_alert(
+                client,
+                f"Settlement request database write failed ({type(error).__name__})",
+            )
+            await safe_dm(client, actor, t("submission_error"))
+            return
+
+        projection_ok = True
+        try:
+            request = await synchronize_work_request_message(client, request)
+        except Exception as error:
+            projection_ok = False
+            logger.exception("Settlement request saved but Slack projection failed")
+            await safe_alert(
+                client,
+                f"Settlement request {request.reference_number} Slack projection failed "
+                f"({type(error).__name__})",
+            )
         await safe_dm(
-            client, actor, t("settlement_request_sent", reference=request.reference_number)
+            client,
+            actor,
+            t(
+                "settlement_request_sent" if projection_ok else "request_saved_projection_failed",
+                reference=request.reference_number,
+            ),
         )
         await safe_dm(
             client,
@@ -721,6 +763,7 @@ def register_handlers(slack_app, database: Database) -> None:
             t("settlement_assignment_notice", reference=request.reference_number),
             work_request_blocks(request),
         )
+        await publish_home(client, actor)
 
     @slack_app.action("view_work_request")
     async def view_work_request(ack, body, client):
@@ -887,6 +930,7 @@ def register_handlers(slack_app, database: Database) -> None:
                 or source.assignee_slack_user_id != actor
             ):
                 raise ConfigurationError
+            await ledger.assert_operating_channel(command.channel_id)
             await ledger.assert_channel_member(actor, command.channel_id)
             created_data = settlement_created_data(
                 command,
@@ -925,28 +969,43 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={"work_department": t("invalid_state")},
             )
             return
+        await ack()
         try:
-            source, successor = await ledger.handoff_work_request(
-                source.id,
-                actor,
-                created_data,
+            source, successor = await ledger.handoff_work_request(source.id, actor, created_data)
+        except Exception as error:
+            logger.exception("Failed to hand off purchase to settlement")
+            await safe_alert(
+                client,
+                f"Purchase handoff database write failed ({type(error).__name__})",
             )
-            await ack()
-            await synchronize_work_request_message(client, source)
-            await synchronize_work_request_message(client, successor)
+            await safe_dm(client, actor, t("submission_error"))
+            return
+
+        projection_ok = True
+        for item in (source, successor):
+            try:
+                await synchronize_work_request_message(client, item)
+            except Exception as error:
+                projection_ok = False
+                logger.exception("Purchase handoff saved but Slack projection failed")
+                await safe_alert(
+                    client,
+                    f"Work request {item.reference_number} Slack projection failed "
+                    f"({type(error).__name__})",
+                )
+        if not projection_ok:
             await safe_dm(
                 client,
-                successor.assignee_slack_user_id,
-                t("settlement_assignment_notice", reference=successor.reference_number),
-                work_request_blocks(successor),
+                actor,
+                t("request_saved_projection_failed", reference=successor.reference_number),
             )
-            await publish_home(client, actor)
-        except Exception:
-            logger.exception("Failed to hand off purchase to settlement")
-            await ack(
-                response_action="errors",
-                errors={"work_channel": t("submission_error")},
-            )
+        await safe_dm(
+            client,
+            successor.assignee_slack_user_id,
+            t("settlement_assignment_notice", reference=successor.reference_number),
+            work_request_blocks(successor),
+        )
+        await publish_home(client, actor)
 
     @slack_app.action("start_assigned_settlement")
     async def start_assigned_settlement(ack, body, client):
@@ -1179,35 +1238,59 @@ def register_handlers(slack_app, database: Database) -> None:
             await ack(response_action="errors", errors={"purpose": t("configuration_error")})
             return
 
+        ledger = repository(client)
         try:
-            ledger = repository(client)
             request = await ledger.create_request(created)
-            request = await synchronize_request_message(client, request)
-            confirmation = t("request_submitted", reference=request.reference_number)
-            warning_links = drive_warning_urls(
-                [command.evidence_folder_url] + [item.url for item in command.evidence.values()]
-            )
-            if warning_links:
-                confirmation += f"\n\n{t('non_drive_warning')}"
-            await safe_dm(client, actor, confirmation)
-            await notify_after_transition(client, request)
-            source_work_request_id = context.get("source_work_request_id")
-            if source_work_request_id:
-                try:
-                    work_request = await ledger.complete_work_request(
-                        source_work_request_id,
-                        actor,
-                        successor_type="EXPENSE_REQUEST",
-                        successor_id=request.id,
-                    )
-                    await synchronize_work_request_message(client, work_request)
-                except (ApprovalPermissionError, InvalidStateTransitionError, EntityNotFoundError):
-                    logger.exception("Expense submitted but assignment completion failed")
-            await publish_home(client, actor)
-        except Exception:
+        except Exception as error:
             logger.exception("Failed to create an expense ledger record")
-            await safe_alert(client, "Expense request persistence failed")
+            await safe_alert(
+                client,
+                f"Expense request database write failed ({type(error).__name__})",
+            )
             await safe_dm(client, actor, t("submission_error"))
+            return
+
+        projection_ok = True
+        try:
+            request = await synchronize_request_message(client, request)
+        except Exception as error:
+            projection_ok = False
+            logger.exception("Expense request saved but Slack projection failed")
+            await safe_alert(
+                client,
+                f"Expense request {request.reference_number} Slack projection failed "
+                f"({type(error).__name__})",
+            )
+
+        confirmation = t(
+            "request_submitted" if projection_ok else "request_saved_projection_failed",
+            reference=request.reference_number,
+        )
+        warning_links = drive_warning_urls(
+            [command.evidence_folder_url] + [item.url for item in command.evidence.values()]
+        )
+        if warning_links:
+            confirmation += f"\n\n{t('non_drive_warning')}"
+        await safe_dm(client, actor, confirmation)
+        await notify_after_transition(client, request)
+        source_work_request_id = context.get("source_work_request_id")
+        if source_work_request_id:
+            try:
+                work_request = await ledger.complete_work_request(
+                    source_work_request_id,
+                    actor,
+                    successor_type="EXPENSE_REQUEST",
+                    successor_id=request.id,
+                )
+                await synchronize_work_request_message(client, work_request)
+            except Exception as error:
+                logger.exception("Expense submitted but assignment completion failed")
+                await safe_alert(
+                    client,
+                    f"Expense request {request.reference_number} assignment completion failed "
+                    f"({type(error).__name__})",
+                )
+        await publish_home(client, actor)
 
     @slack_app.action("approve_request")
     async def approve_request(ack, body, client, respond):

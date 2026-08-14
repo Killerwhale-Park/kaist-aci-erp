@@ -13,6 +13,7 @@ from app.application.work_lifecycle import lifecycle_adapter_for
 from app.config.roles import (
     ASSIGN_SETTLEMENT,
     MANAGE_CONFIGURATION,
+    SUBMIT_REQUEST,
     SYSTEM_ADMIN_ROLE,
     WORKSPACE_ROLE_SCOPE,
     default_role_assignments,
@@ -209,7 +210,9 @@ class LedgerRepository:
             occurred_at=occurred_at,
         )
         async with self.database.session() as session, session.begin():
-            session.add_all((record, event))
+            session.add(record)
+            await session.flush()
+            session.add(event)
         return provisional
 
     async def get_request(self, request_id: str) -> ExpenseRequest:
@@ -368,7 +371,9 @@ class LedgerRepository:
             occurred_at=occurred_at,
         )
         async with self.database.session() as session, session.begin():
-            session.add_all((record, event))
+            session.add(record)
+            await session.flush()
+            session.add(event)
         return provisional
 
     @staticmethod
@@ -551,9 +556,10 @@ class LedgerRepository:
                 created_at=successor.created_at,
                 updated_at=successor.created_at,
             )
+            session.add(successor_record)
+            await session.flush()
             session.add_all(
                 (
-                    successor_record,
                     WorkRequestEventRecord(
                         request_id=successor.id,
                         sequence=1,
@@ -780,6 +786,23 @@ class LedgerRepository:
             routes = set(await session.scalars(select(ApprovalRouteRecord.approval_channel_id)))
         return sorted(manual | routes)
 
+    async def submission_configuration(self) -> tuple[bool, bool]:
+        """Return whether purchase channels and expense routes are configured."""
+        async with self.database.session() as session:
+            manual_channel = await session.scalar(
+                select(OperatingChannelRecord.channel_id).limit(1)
+            )
+            route_channel = await session.scalar(
+                select(ApprovalRouteRecord.approval_channel_id).limit(1)
+            )
+        return bool(manual_channel or route_channel), bool(route_channel)
+
+    async def assert_operating_channel(self, channel_id: str) -> None:
+        if channel_id not in await self.registered_operation_channel_ids():
+            raise ConfigurationError("The selected channel is not a registered operating channel")
+        if not await self.channel_is_available(channel_id):
+            raise ConfigurationError("The app is not a member of the selected operating channel")
+
     async def get_rule(self, department_id: str, category_id: str) -> ApprovalRule:
         category = category_by_id(category_id, department_id)
         workflow = workflow_for_budget_node(category_id, department_id)
@@ -945,7 +968,8 @@ class LedgerRepository:
             raise ApprovalPermissionError("System administrator role required")
 
     async def assert_can_submit_request(self, actor: str, channel_id: str) -> None:
-        await self.assert_channel_member(actor, channel_id)
+        if actor not in await self.users_with_capability(SUBMIT_REQUEST, channel_id):
+            raise ApprovalPermissionError("Eligible requester role and channel membership required")
 
     async def settlement_assigner_ids(self, channel_id: str | None = None) -> set[str]:
         return await self.users_with_capability(ASSIGN_SETTLEMENT, channel_id)

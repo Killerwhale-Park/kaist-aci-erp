@@ -2,6 +2,29 @@ STRINGS = {
     "app_title": "Expense Support / 연구비 정산",
     "new_request": "New Expense Request / 새 정산 신청",
     "new_request_short": "New Expense / 새 신청",
+    "home_intro": (
+        "*What do you need to do? / 어떤 일을 시작하나요?*\n"
+        "Start a request here, then track it under My Active Requests. "
+        "Items waiting for your approval or follow-up appear under My Action Items.\n"
+        "여기서 요청을 시작하고, 진행 상황은 ‘내가 올린 처리 중 요청’에서 확인하세요. "
+        "승인·결제·정산 등 내가 처리할 일은 ‘내가 처리할 요청’에 표시됩니다."
+    ),
+    "start_request": "Start / 요청 시작",
+    "expense_start_help": (
+        "*Expense reimbursement / 정산 신청*\n"
+        "Use after a payment was made and evidence is ready.\n"
+        "결제가 끝났고 영수증 등 증빙을 제출할 때 사용합니다."
+    ),
+    "purchase_start_help": (
+        "*Purchase request / 구매 요청*\n"
+        "Use before payment when a professor or buyer needs to purchase an item.\n"
+        "결제 전에 교수·구매 담당자에게 물품 구매를 요청할 때 사용합니다."
+    ),
+    "settlement_start_help": (
+        "*Assign settlement / 정산 업무 배정*\n"
+        "Use after payment to assign preparation of the expense record.\n"
+        "결제 후 학생 등 담당자에게 정산 작성을 맡길 때 사용합니다."
+    ),
     "work_requests": "Work Requests / 업무 요청",
     "new_purchase_request": "Purchase Request / 구매 요청",
     "new_settlement_request": "Assign Settlement / 정산 요청 보내기",
@@ -56,6 +79,26 @@ STRINGS = {
     "channel_unavailable": (
         "Select a registered operating channel that the app has joined.\n"
         "System Channels에 등록되고 앱이 참여 중인 운영 채널을 선택해주세요."
+    ),
+    "request_role_required": (
+        "An administrator must add you to Eligible Requesters before you can submit requests.\n"
+        "관리자가 접근 역할에서 나를 ‘신청 가능자’로 지정해야 요청을 보낼 수 있습니다."
+    ),
+    "request_configuration_missing": (
+        "Requests are not open yet. An administrator must register an operating channel and "
+        "configure approval routing.\n"
+        "아직 요청 설정이 완료되지 않았습니다. 관리자가 운영 채널을 등록하고 승인 라우팅을 "
+        "설정해야 합니다."
+    ),
+    "expense_configuration_missing": (
+        "Expense reimbursement is unavailable until an administrator configures approval "
+        "routing. Purchase requests can still be used.\n"
+        "정산 신청은 관리자가 승인 라우팅을 설정한 뒤 사용할 수 있습니다. 구매 요청은 "
+        "현재 사용할 수 있습니다."
+    ),
+    "operating_channel_missing": (
+        "Purchase and assignment requests are unavailable until an operating channel is "
+        "registered.\n운영 채널을 등록한 뒤 구매·정산 업무 요청을 사용할 수 있습니다."
     ),
     "submit": "Submit / 제출",
     "continue": "Continue / 계속",
@@ -180,8 +223,8 @@ STRINGS = {
         "You are not authorized to approve this request.\n이 요청을 승인할 권한이 없습니다."
     ),
     "requester_role_required": (
-        "You must be a member of the selected operating channel.\n"
-        "선택한 운영 채널의 멤버여야 신청할 수 있습니다."
+        "You need the Eligible Requester role and must be a member of the selected operating "
+        "channel.\n‘신청 가능자’ Role이 있고 선택한 운영 채널의 멤버여야 신청할 수 있습니다."
     ),
     "not_applicant": (
         "Only the applicant can update this request.\n신청자 본인만 이 요청을 수정할 수 있습니다."
@@ -222,6 +265,12 @@ STRINGS = {
     "submission_error": (
         "The request could not be saved. Please try again or contact an administrator.\n"
         "신청을 저장하지 못했습니다. 다시 시도하거나 관리자에게 문의해주세요."
+    ),
+    "request_saved_projection_failed": (
+        "Request {reference} was saved, but its channel message could not be posted. "
+        "It is still available in App Home. An administrator has been notified.\n"
+        "요청 {reference}은 저장됐지만 채널 메시지를 게시하지 못했습니다. App Home에서는 "
+        "계속 확인할 수 있으며 관리자에게 오류를 알렸습니다."
     ),
     "form_open_error": (
         "Slack could not open the form. Please try again.\n"

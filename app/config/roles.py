@@ -2,11 +2,13 @@ from dataclasses import dataclass
 
 WORKSPACE_ROLE_SCOPE = "workspace"
 
+REQUESTER_ROLE = "REQUESTER"
 STUDENT_COORDINATOR_ROLE = "STUDENT_COORDINATOR"
 PROFESSOR_ROLE = "PROFESSOR"
 ADMIN_STAFF_ROLE = "ADMIN_STAFF"
 SYSTEM_ADMIN_ROLE = "SYSTEM_ADMIN"
 
+SUBMIT_REQUEST = "SUBMIT_REQUEST"
 ASSIGN_SETTLEMENT = "ASSIGN_SETTLEMENT"
 MANAGE_CONFIGURATION = "MANAGE_CONFIGURATION"
 
@@ -28,6 +30,12 @@ class RoleAssignmentSeed:
 
 ROLE_DEFINITION_SEEDS = (
     RoleDefinitionSeed(
+        REQUESTER_ROLE,
+        "Eligible Requesters",
+        "신청 가능자",
+        capabilities=frozenset({SUBMIT_REQUEST}),
+    ),
+    RoleDefinitionSeed(
         STUDENT_COORDINATOR_ROLE,
         "Student Coordinators",
         "학생 담당자",
@@ -48,7 +56,7 @@ ROLE_DEFINITION_SEEDS = (
         SYSTEM_ADMIN_ROLE,
         "System Administrators",
         "시스템 관리자",
-        capabilities=frozenset({ASSIGN_SETTLEMENT, MANAGE_CONFIGURATION}),
+        capabilities=frozenset({SUBMIT_REQUEST, ASSIGN_SETTLEMENT, MANAGE_CONFIGURATION}),
         required=True,
     ),
 )
@@ -75,6 +83,17 @@ def roles_with_capability(capability: str) -> tuple[str, ...]:
         for definition in ROLE_DEFINITION_SEEDS
         if capability in definition.capabilities
     )
+
+
+def assigned_users_with_capability(
+    assignments: dict[str, dict[str, set[str]]], capability: str
+) -> set[str]:
+    workspace = assignments.get(WORKSPACE_ROLE_SCOPE, {})
+    return {
+        user_id
+        for role_id in roles_with_capability(capability)
+        for user_id in workspace.get(role_id, set())
+    }
 
 
 def empty_role_set() -> dict[str, set[str]]:

@@ -1,104 +1,76 @@
+from dataclasses import dataclass
+
 from app.application.work_items import UserWorkQueue, WorkItem, WorkItemAction
 from app.domain.enums import UserRole
-from app.domain.models import BudgetProgram, UserProfile
+from app.domain.models import UserProfile
 from app.i18n import display_name, t
 from app.slack.utils import escape_mrkdwn
 
 
+@dataclass(frozen=True)
+class HomeCapabilities:
+    can_request: bool = False
+    expense_ready: bool = False
+    purchase_ready: bool = False
+    can_assign_settlement: bool = False
+
+
 def app_home_view(
     profile: UserProfile,
-    budgets: list[BudgetProgram],
     work_queue: UserWorkQueue,
-    can_assign_settlement: bool = False,
-    can_submit_requests: bool = False,
+    capabilities: HomeCapabilities | None = None,
 ) -> dict:
+    access = capabilities or HomeCapabilities()
     blocks: list[dict] = [
-        {"type": "header", "text": {"type": "plain_text", "text": t("app_title")}}
+        {"type": "header", "text": {"type": "plain_text", "text": t("app_title")}},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": t("home_intro")},
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*{t('start_request')}*"},
+        },
     ]
-    if can_submit_requests:
+
+    if access.can_request and access.expense_ready:
         blocks.append(
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": "new_expense_request",
-                        "style": "primary",
-                        "text": {"type": "plain_text", "text": f"+ {t('new_request')}"},
-                        "value": "new",
-                    }
-                ],
-            }
-        )
-    if can_submit_requests or can_assign_settlement:
-        work_request_actions = []
-        if can_submit_requests:
-            work_request_actions.append(
-                {
-                    "type": "button",
-                    "action_id": "new_purchase_work_request",
-                    "text": {"type": "plain_text", "text": t("new_purchase_request")},
-                    "value": "purchase",
-                }
+            _start_action(
+                "new_expense_request",
+                t("new_request"),
+                t("expense_start_help"),
+                "new",
+                primary=True,
             )
-        if can_assign_settlement:
-            work_request_actions.append(
-                {
-                    "type": "button",
-                    "action_id": "new_settlement_work_request",
-                    "text": {"type": "plain_text", "text": t("new_settlement_request")},
-                    "value": "settlement",
-                }
-            )
-        blocks.extend(
-            [
-                {"type": "divider"},
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*{t('work_requests')}*"},
-                },
-                {"type": "actions", "elements": work_request_actions},
-            ]
         )
-    if not can_submit_requests:
+    if access.can_request and access.purchase_ready:
         blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": t("requester_role_required")},
-            }
-        )
-    if can_submit_requests:
-        blocks.extend(
-            [
-                {"type": "divider"},
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*{t('available_programs')}*"},
-                },
-            ]
-        )
-    for budget in budgets if can_submit_requests else []:
-        text = f"*{display_name(escape_mrkdwn(budget.name_en), escape_mrkdwn(budget.name_ko))}*"
-        if budget.is_available:
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": text},
-                    "accessory": {
-                        "type": "button",
-                        "action_id": "new_expense_request",
-                        "text": {"type": "plain_text", "text": t("open")},
-                        "value": budget.id,
-                    },
-                }
+            _start_action(
+                "new_purchase_work_request",
+                t("new_purchase_request"),
+                t("purchase_start_help"),
+                "purchase",
             )
-        else:
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"{text}\n_{t('coming_soon')}_"},
-                }
+        )
+    if access.can_assign_settlement and access.purchase_ready:
+        blocks.append(
+            _start_action(
+                "new_settlement_work_request",
+                t("new_settlement_request"),
+                t("settlement_start_help"),
+                "settlement",
             )
+        )
+
+    if not access.can_request:
+        blocks.append(_notice(t("request_role_required")))
+    elif not access.expense_ready and not access.purchase_ready:
+        blocks.append(_notice(t("request_configuration_missing")))
+    elif not access.expense_ready:
+        blocks.append(_notice(t("expense_configuration_missing")))
+    elif not access.purchase_ready:
+        blocks.append(_notice(t("operating_channel_missing")))
 
     blocks.extend(_work_queue_section(t("my_active_requests"), work_queue.submitted, "no_requests"))
     blocks.extend(
@@ -126,6 +98,33 @@ def app_home_view(
             ]
         )
     return {"type": "home", "blocks": blocks[:100]}
+
+
+def _start_action(
+    action_id: str,
+    label: str,
+    help_text: str,
+    value: str,
+    *,
+    primary: bool = False,
+) -> dict:
+    button = {
+        "type": "button",
+        "action_id": action_id,
+        "text": {"type": "plain_text", "text": label},
+        "value": value,
+    }
+    if primary:
+        button["style"] = "primary"
+    return {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": help_text},
+        "accessory": button,
+    }
+
+
+def _notice(text: str) -> dict:
+    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
 
 
 _ACTION_PRESENTATION = {

@@ -86,10 +86,13 @@ https://kaist-aci-erp.vercel.app/slack/events
 배포 후 App Home에서 순서대로 설정합니다.
 
 1. System Channels: Audit, Alerts, 추가 운영 채널
-2. Access Roles: 학생 담당자, 교수, 행정팀, 시스템 관리자
+2. Access Roles: 신청 가능자, 학생 담당자, 교수, 행정팀, 시스템 관리자
 3. Approval Routing: 학과·재원 항목별 승인 채널
 
-승인 권한은 `전역 Role ∩ 해당 운영 채널 멤버`로 계산되며 요청 제출 시점에 고정됩니다.
+구매 요청은 운영 채널 등록 후 사용할 수 있습니다. 정산 신청은 해당 재원 항목의 Approval
+Routing까지 설정해야 App Home에 표시됩니다.
+
+신청·승인 권한은 `전역 Role ∩ 해당 운영 채널 멤버`로 계산되며 요청 제출 시점에 고정됩니다.
 
 ## 로컬 개발
 

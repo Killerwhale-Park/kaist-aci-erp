@@ -6,6 +6,7 @@ from app.config.roles import (
     ADMIN_STAFF_ROLE,
     ASSIGN_SETTLEMENT,
     PROFESSOR_ROLE,
+    REQUESTER_ROLE,
     ROLE_DEFINITION_SEEDS,
     STUDENT_COORDINATOR_ROLE,
     SYSTEM_ADMIN_ROLE,
@@ -31,6 +32,7 @@ def role_configuration() -> dict[str, dict[str, set[str]]]:
     return {
         WORKSPACE_ROLE_SCOPE: {
             **empty_role_set(),
+            REQUESTER_ROLE: {"U_REQUESTER"},
             STUDENT_COORDINATOR_ROLE: {"U_COORDINATOR"},
             PROFESSOR_ROLE: {"U_PROFESSOR", "U_OTHER_PROFESSOR", "U_OUTSIDE_PROFESSOR"},
             ADMIN_STAFF_ROLE: {"U_ADMIN_STAFF"},
@@ -68,6 +70,8 @@ async def test_channel_membership_scopes_global_roles(slack_client, database) ->
     await ledger.assert_can_submit_request("U_REQUESTER", "C_APPROVAL")
     with pytest.raises(ApprovalPermissionError):
         await ledger.assert_can_submit_request("U_REQUESTER", "C_DEPARTMENT_2")
+    with pytest.raises(ApprovalPermissionError):
+        await ledger.assert_can_submit_request("U_PROFESSOR", "C_APPROVAL")
     assert await ledger.settlement_assigner_ids("C_APPROVAL") == {
         "U_PROFESSOR",
         "U_ADMIN_STAFF",

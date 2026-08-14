@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from sqlalchemy import event
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -48,6 +49,15 @@ class Database:
                 # Vercel instances are short lived, so keep each local pool deliberately small.
                 options.update(pool_size=2, max_overflow=3, pool_recycle=300)
             self._engine = create_async_engine(url, **options)
+            if backend == "sqlite":
+                # SQLite disables foreign keys by default. Match PostgreSQL locally so
+                # parent/child write-order bugs fail in development and tests as well.
+                @event.listens_for(self._engine.sync_engine, "connect")
+                def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+                    cursor = dbapi_connection.cursor()
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                    cursor.close()
+
             self._sessions = async_sessionmaker(self._engine, expire_on_commit=False)
         return self._engine
 

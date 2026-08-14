@@ -8,7 +8,7 @@ from app.domain.work_requests import (
     work_request_from_created,
 )
 from app.domain.workflow import request_from_created
-from app.slack.home import app_home_view
+from app.slack.home import HomeCapabilities, app_home_view
 from tests.test_approval_workflow import make_created
 from tests.test_work_requests import purchase_command, purchase_workflow, settlement_command
 
@@ -98,9 +98,8 @@ def test_home_renders_active_and_action_required_queues() -> None:
 
     view = app_home_view(
         UserProfile("U_STUDENT", UserRole.REQUESTER),
-        [],
         queue,
-        can_submit_requests=True,
+        HomeCapabilities(can_request=True, expense_ready=True, purchase_ready=True),
     )
     action_ids = {
         element["action_id"]
@@ -111,3 +110,37 @@ def test_home_renders_active_and_action_required_queues() -> None:
     assert "view_work_request" in action_ids
     assert "start_assigned_settlement" in action_ids
     assert len(view["blocks"]) <= 100
+
+
+def test_home_only_offers_request_types_with_runtime_configuration() -> None:
+    from app.domain.enums import UserRole
+    from app.domain.models import UserProfile
+
+    queue = build_user_work_queue(
+        "U_ADMIN",
+        own_expenses=[],
+        pending_expense_approvals=[],
+        submitted_work_requests=[],
+        actionable_work_requests=[],
+    )
+    view = app_home_view(
+        UserProfile("U_ADMIN", UserRole.SYSTEM_ADMIN),
+        queue,
+        HomeCapabilities(
+            can_request=True,
+            expense_ready=False,
+            purchase_ready=True,
+            can_assign_settlement=True,
+        ),
+    )
+    action_ids = {
+        block["accessory"]["action_id"]
+        for block in view["blocks"]
+        if block.get("accessory", {}).get("action_id")
+    }
+    page_text = "\n".join(block.get("text", {}).get("text", "") for block in view["blocks"])
+
+    assert "new_purchase_work_request" in action_ids
+    assert "new_settlement_work_request" in action_ids
+    assert "new_expense_request" not in action_ids
+    assert "승인 라우팅" in page_text
