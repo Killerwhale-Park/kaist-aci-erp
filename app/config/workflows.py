@@ -8,7 +8,8 @@ class ApprovalStepSeed:
     id: str
     name_en: str
     name_ko: str
-    approver_roles: tuple[str, ...]
+    approver_roles: tuple[str, ...] = ()
+    actor_binding: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,5 +45,19 @@ APPROVAL_WORKFLOW_SEEDS = [
                 approver_roles=(ADMIN_STAFF_ROLE,),
             ),
         ),
-    )
+    ),
+    ApprovalWorkflowSeed(
+        id="purchase_payment_approval",
+        name_en="Purchase Payment Approval",
+        name_ko="구매 결제 승인",
+        steps=(
+            ApprovalStepSeed(
+                id="payment_assignee_approval",
+                name_en="Payment Assignee Approval",
+                name_ko="결제 담당자 승인",
+                approver_roles=(PROFESSOR_ROLE,),
+                actor_binding="payment_assignee",
+            ),
+        ),
+    ),
 ]

@@ -36,6 +36,8 @@ Approval Workflow Configuration
 
 버튼 값은 내부 요청 UUID입니다. Slack `message_ts`는 메시지를 갱신하기 위한 보조값일 뿐 식별자나 원장이 아닙니다. 메시지가 삭제되면 다음 갱신 시 새 메시지를 만들고 새 `message_ts`를 DB에 연결합니다.
 
+`case_id`, `parent_request_id`, `source_work_request_id`가 구매 요청 → 정산 업무 → 정산 신청의 계보를 연결합니다. 인계 transaction은 선행 작업 완료 event와 후속 작업 생성 event를 함께 기록합니다.
+
 ## 승인 상태 전이
 
 ```text
@@ -47,6 +49,26 @@ IN_APPROVAL(step 1..N)
 ```
 
 엔진은 단계 수를 알지 못합니다. Workflow 설정의 step 목록을 순서대로 실행합니다. 각 요청은 제출 시점의 Workflow, 승인자, 증빙 요건 snapshot을 가지므로 이후 설정 변경이 기존 요청을 바꾸지 않습니다.
+
+동일한 승인 체인을 정산 신청과 구매 요청이 공유합니다. 엔진은 엔티티 종류나 Role 이름을 모르며, workflow resolver가 Role·명시적 담당자·채널 멤버십을 실제 Slack 사용자 ID snapshot으로 변환합니다.
+
+## 작업함과 인계
+
+App Home은 역할별 전용 화면이 아니라 사용자와 엔티티의 관계를 공통 `WorkItem`으로 투영합니다.
+
+- 내가 올린 처리 중 요청: 신청자·원 요청자·인계 요청자 관계
+- 내가 처리할 요청: 현재 승인자·결제 담당자·정산 담당자 관계
+
+후속 동작은 lifecycle adapter가 결정합니다.
+
+```text
+일반 완료 adapter: action complete → close
+구매 adapter: approval 1..N → payment → settlement handoff
+정산 업무 adapter: settlement assignment → expense request
+정산 신청 adapter: approval 1..N → post-evidence/close
+```
+
+따라서 core 작업함과 승인 엔진에 교수·학생·행정팀 분기문을 추가하지 않습니다. 새 엔티티나 종료/인계 방식은 policy와 adapter를 추가해 확장합니다.
 
 ## Role과 채널
 
@@ -77,3 +99,5 @@ Slack 메시지는 보존 기간과 무관하게 삭제 가능한 projection입�
 - 증빙: DB에는 Google Drive HTTPS URL만 저장
 
 애플리케이션 시작 시 자동 DDL은 실행하지 않습니다. 배포 전에 `alembic upgrade head`를 명시적으로 실행하여 concurrent serverless instance의 스키마 경쟁을 방지합니다.
+
+빈번한 uptime 확인은 DB를 조회하지 않는 `/health`를 사용합니다. `/ready`는 migration table을 조회하므로 배포 검증과 장애 진단 때만 사용합니다.

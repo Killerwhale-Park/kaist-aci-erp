@@ -1,15 +1,14 @@
-from app.domain.enums import EvidenceSubmissionStatus, EvidenceTiming, RequestStatus, UserRole
-from app.domain.models import BudgetProgram, ExpenseRequest, UserProfile
+from app.application.work_items import UserWorkQueue, WorkItem, WorkItemAction
+from app.domain.enums import UserRole
+from app.domain.models import BudgetProgram, UserProfile
 from app.i18n import display_name, t
-from app.slack.messages import status_text
 from app.slack.utils import escape_mrkdwn
 
 
 def app_home_view(
     profile: UserProfile,
     budgets: list[BudgetProgram],
-    own_requests: list[ExpenseRequest],
-    pending_approvals: list[ExpenseRequest],
+    work_queue: UserWorkQueue,
     can_assign_settlement: bool = False,
     can_submit_requests: bool = False,
 ) -> dict:
@@ -101,102 +100,14 @@ def app_home_view(
                 }
             )
 
+    blocks.extend(_work_queue_section(t("my_active_requests"), work_queue.submitted, "no_requests"))
     blocks.extend(
-        [
-            {"type": "divider"},
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*{t('my_requests')}*"}},
-        ]
+        _work_queue_section(
+            t("my_action_required"),
+            work_queue.action_required,
+            "no_action_required",
+        )
     )
-    if not own_requests:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": t("no_requests")}})
-    for request in own_requests:
-        category_name = display_name(
-            escape_mrkdwn(request.category.name_en), escape_mrkdwn(request.category.name_ko)
-        )
-        actions = [
-            {
-                "type": "button",
-                "action_id": "view_request",
-                "text": {"type": "plain_text", "text": t("view")},
-                "value": request.slack_locator,
-            }
-        ]
-        if request.status == RequestStatus.CHANGES_REQUESTED:
-            actions.append(
-                {
-                    "type": "button",
-                    "action_id": "edit_request",
-                    "text": {"type": "plain_text", "text": t("edit_request")},
-                    "value": request.slack_locator,
-                }
-            )
-        has_missing_post_evidence = any(
-            evidence.timing == EvidenceTiming.POST
-            and evidence.status == EvidenceSubmissionStatus.MISSING
-            for evidence in request.evidence_submissions
-        )
-        if (
-            request.status
-            in {
-                RequestStatus.APPROVED_PENDING_POST_EVIDENCE,
-                RequestStatus.COMPLETED,
-            }
-            and has_missing_post_evidence
-        ):
-            actions.append(
-                {
-                    "type": "button",
-                    "action_id": "add_post_evidence",
-                    "text": {"type": "plain_text", "text": t("submit_post_evidence")},
-                    "value": request.slack_locator,
-                }
-            )
-        blocks.extend(
-            [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": (
-                            f"*{request.reference_number}*\n"
-                            f"{category_name}\n"
-                            f"{status_text(request.status)}"
-                        ),
-                    },
-                },
-                {"type": "actions", "elements": actions},
-            ]
-        )
-
-    if pending_approvals:
-        blocks.extend(
-            [
-                {"type": "divider"},
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*{t('pending_approvals')}*"},
-                },
-            ]
-        )
-        for request in pending_approvals[:10]:
-            pending_text = (
-                f"*{request.reference_number}* — {escape_mrkdwn(request.category.name_en)}"
-            )
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": pending_text,
-                    },
-                    "accessory": {
-                        "type": "button",
-                        "action_id": "view_request",
-                        "text": {"type": "plain_text", "text": t("view")},
-                        "value": request.slack_locator,
-                    },
-                }
-            )
 
     if profile.role == UserRole.SYSTEM_ADMIN:
         blocks.extend(
@@ -215,3 +126,76 @@ def app_home_view(
             ]
         )
     return {"type": "home", "blocks": blocks[:100]}
+
+
+_ACTION_PRESENTATION = {
+    WorkItemAction.VIEW_EXPENSE: ("view_request", "view"),
+    WorkItemAction.VIEW_WORK: ("view_work_request", "view"),
+    WorkItemAction.EDIT_EXPENSE: ("edit_request", "edit_request"),
+    WorkItemAction.SUBMIT_POST_EVIDENCE: ("add_post_evidence", "submit_post_evidence"),
+    WorkItemAction.APPROVE_EXPENSE: ("approve_request", "approve"),
+    WorkItemAction.REQUEST_EXPENSE_CHANGES: ("request_changes", "request_changes"),
+    WorkItemAction.REJECT_EXPENSE: ("reject_request", "reject"),
+    WorkItemAction.APPROVE_WORK: ("approve_work_request", "approve"),
+    WorkItemAction.REJECT_WORK: ("reject_work_request", "reject"),
+    WorkItemAction.HANDOFF_PURCHASE: (
+        "handoff_purchase_to_settlement",
+        "payment_complete_handoff",
+    ),
+    WorkItemAction.START_SETTLEMENT: ("start_assigned_settlement", "start_settlement"),
+    WorkItemAction.COMPLETE_WORK: ("complete_work_request", "mark_completed"),
+}
+
+
+def _work_queue_section(title: str, items: tuple[WorkItem, ...], empty_key: str) -> list[dict]:
+    blocks: list[dict] = [
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}*"}},
+    ]
+    if not items:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": t(empty_key)}})
+        return blocks
+    for item in items[:10]:
+        title_text = display_name(escape_mrkdwn(item.title_en), escape_mrkdwn(item.title_ko))
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*{escape_mrkdwn(item.reference_number)}*\n"
+                        f"{title_text}\n{_work_item_status(item.status)}"
+                    ),
+                },
+            }
+        )
+        actions = []
+        for action in item.actions:
+            action_id, label_key = _ACTION_PRESENTATION[action]
+            button = {
+                "type": "button",
+                "action_id": action_id,
+                "text": {"type": "plain_text", "text": t(label_key)},
+                "value": item.source_id,
+            }
+            if action in {WorkItemAction.APPROVE_EXPENSE, WorkItemAction.APPROVE_WORK}:
+                button["style"] = "primary"
+            elif action in {WorkItemAction.REJECT_EXPENSE, WorkItemAction.REJECT_WORK}:
+                button["style"] = "danger"
+            actions.append(button)
+        if actions:
+            blocks.append({"type": "actions", "elements": actions})
+    return blocks
+
+
+def _work_item_status(status: str) -> str:
+    key = {
+        "IN_APPROVAL": "status_in_approval",
+        "CHANGES_REQUESTED": "status_changes_requested",
+        "APPROVED_PENDING_POST_EVIDENCE": "status_approved_pending_post_evidence",
+        "ACTION_REQUIRED": "work_status_action_required",
+        "OPEN": "work_status_action_required",
+        "REJECTED": "status_rejected",
+        "COMPLETED": "status_completed",
+    }.get(status)
+    return t(key) if key else escape_mrkdwn(status)

@@ -7,8 +7,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from slack_sdk.errors import SlackApiError
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
+from app.application.work_lifecycle import lifecycle_adapter_for
 from app.config.roles import (
     ASSIGN_SETTLEMENT,
     MANAGE_CONFIGURATION,
@@ -19,14 +20,22 @@ from app.config.roles import (
     roles_with_capability,
 )
 from app.database import Database
-from app.domain.catalog import category_by_id, workflow_for_budget_node
+from app.domain.catalog import category_by_id, workflow_by_id, workflow_for_budget_node
 from app.domain.enums import RequestStatus, WorkRequestStatus
-from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest, WorkRequest
+from app.domain.models import (
+    ApprovalRule,
+    ApprovalRuleStep,
+    ExpenseRequest,
+    ResolvedApprovalWorkflow,
+    WorkRequest,
+)
 from app.domain.work_requests import (
     WORK_REQUEST_COMPLETED,
     WORK_REQUEST_CREATED,
+    apply_work_event,
     replay_work_events,
     work_request_from_created,
+    work_request_summary,
 )
 from app.domain.workflow import (
     REQUEST_CREATED,
@@ -39,7 +48,6 @@ from app.exceptions import (
     ApprovalPermissionError,
     ConfigurationError,
     EntityNotFoundError,
-    InvalidStateTransitionError,
 )
 from app.ledger.tables import (
     ApprovalRouteRecord,
@@ -181,6 +189,8 @@ class LedgerRepository:
             reference_number=provisional.reference_number,
             applicant_slack_user_id=provisional.applicant_slack_user_id,
             approval_channel_id=provisional.approval_channel_id,
+            case_id=provisional.case_id,
+            source_work_request_id=provisional.source_work_request_id,
             status=provisional.status.value,
             current_approver_slack_user_ids=request_summary(provisional)[
                 "current_approver_slack_user_ids"
@@ -255,6 +265,26 @@ class LedgerRepository:
             )
             return await self._expenses_from_records(session, records)
 
+    async def list_active_for_applicant(self, slack_user_id: str) -> list[ExpenseRequest]:
+        active = {
+            RequestStatus.IN_APPROVAL.value,
+            RequestStatus.CHANGES_REQUESTED.value,
+            RequestStatus.APPROVED_PENDING_POST_EVIDENCE.value,
+        }
+        async with self.database.session() as session:
+            records = list(
+                await session.scalars(
+                    select(ExpenseRequestRecord)
+                    .where(
+                        ExpenseRequestRecord.applicant_slack_user_id == slack_user_id,
+                        ExpenseRequestRecord.status.in_(active),
+                    )
+                    .order_by(ExpenseRequestRecord.updated_at.desc())
+                    .limit(50)
+                )
+            )
+            return await self._expenses_from_records(session, records)
+
     async def list_pending_for_actor(self, slack_user_id: str) -> list[ExpenseRequest]:
         async with self.database.session() as session:
             # JSON containment differs between SQLite and PostgreSQL, so use an indexed status
@@ -311,14 +341,20 @@ class LedgerRepository:
         if provisional.channel_id not in await self.registered_operation_channel_ids():
             raise ConfigurationError("The selected channel is not a registered operating channel")
         occurred_at = datetime.fromisoformat(created_data["created_at"])
+        summary = work_request_summary(provisional)
         record = WorkRequestRecord(
             id=provisional.id,
             reference_number=provisional.reference_number,
             kind=provisional.kind.value,
             requester_slack_user_id=provisional.requester_slack_user_id,
+            originator_slack_user_id=provisional.originator_slack_user_id,
             assignee_slack_user_id=provisional.assignee_slack_user_id,
+            case_id=provisional.case_id,
+            parent_request_id=provisional.parent_request_id,
             channel_id=provisional.channel_id,
             status=provisional.status.value,
+            current_step_order=provisional.current_step_order,
+            current_approver_slack_user_ids=summary["current_approver_slack_user_ids"],
             event_version=1,
             created_at=occurred_at,
             updated_at=occurred_at,
@@ -334,6 +370,14 @@ class LedgerRepository:
         async with self.database.session() as session, session.begin():
             session.add_all((record, event))
         return provisional
+
+    @staticmethod
+    def _work_projection(record: WorkRequestRecord, request: WorkRequest) -> None:
+        summary = work_request_summary(request)
+        record.status = request.status.value
+        record.current_step_order = request.current_step_order
+        record.current_approver_slack_user_ids = summary["current_approver_slack_user_ids"]
+        record.updated_at = _utc_now()
 
     async def _work_request_from_record(self, session, record: WorkRequestRecord) -> WorkRequest:
         result = await session.scalars(
@@ -353,6 +397,33 @@ class LedgerRepository:
         ]
         return replay_work_events(events, message_ts=record.slack_message_ts)
 
+    async def _work_requests_from_records(
+        self, session, records: list[WorkRequestRecord]
+    ) -> list[WorkRequest]:
+        if not records:
+            return []
+        request_ids = [record.id for record in records]
+        result = await session.scalars(
+            select(WorkRequestEventRecord)
+            .where(WorkRequestEventRecord.request_id.in_(request_ids))
+            .order_by(WorkRequestEventRecord.request_id, WorkRequestEventRecord.sequence)
+        )
+        grouped: dict[str, list[dict[str, Any]]] = {request_id: [] for request_id in request_ids}
+        for event in result:
+            grouped[event.request_id].append(
+                {
+                    "ts": f"{event.sequence:020d}",
+                    "kind": event.kind,
+                    "actor": event.actor_slack_user_id,
+                    "data": copy.deepcopy(event.payload),
+                    "at": event.occurred_at.isoformat(),
+                }
+            )
+        return [
+            replay_work_events(grouped[record.id], message_ts=record.slack_message_ts)
+            for record in records
+        ]
+
     async def get_work_request(self, request_id: str) -> WorkRequest:
         actual_id = _record_id(request_id)
         async with self.database.session() as session:
@@ -361,8 +432,15 @@ class LedgerRepository:
                 raise EntityNotFoundError(f"Work request not found: {actual_id}")
             return await self._work_request_from_record(session, record)
 
-    async def complete_work_request(self, request_id: str, actor: str) -> WorkRequest:
+    async def append_work_event(
+        self,
+        request_id: str,
+        kind: str,
+        actor: str,
+        data: dict[str, Any] | None = None,
+    ) -> WorkRequest:
         actual_id = _record_id(request_id)
+        payload = copy.deepcopy(data or {})
         async with self.database.session() as session, session.begin():
             record = await session.scalar(
                 select(WorkRequestRecord).where(WorkRequestRecord.id == actual_id).with_for_update()
@@ -370,33 +448,195 @@ class LedgerRepository:
             if record is None:
                 raise EntityNotFoundError(f"Work request not found: {actual_id}")
             current = await self._work_request_from_record(session, record)
-            allowed = {
-                current.requester_slack_user_id,
-                current.assignee_slack_user_id,
-                *(await self.system_admin_ids()),
-            }
-            if actor not in allowed:
-                raise ApprovalPermissionError("Only a participant can complete this work request")
-            if current.status != WorkRequestStatus.OPEN:
-                raise InvalidStateTransitionError("Work request is already completed")
+            candidate = copy.deepcopy(current)
+            apply_work_event(candidate, kind, actor, _utc_now(), payload)
             occurred_at = _utc_now()
             next_sequence = record.event_version + 1
             session.add(
                 WorkRequestEventRecord(
                     request_id=actual_id,
                     sequence=next_sequence,
-                    kind=WORK_REQUEST_COMPLETED,
+                    kind=kind,
                     actor_slack_user_id=actor,
-                    payload={},
+                    payload=payload,
                     occurred_at=occurred_at,
                 )
             )
             record.event_version = next_sequence
-            record.status = WorkRequestStatus.COMPLETED.value
-            record.updated_at = occurred_at
             await session.flush()
             updated = await self._work_request_from_record(session, record)
+            self._work_projection(record, updated)
         return updated
+
+    async def complete_work_request(
+        self,
+        request_id: str,
+        actor: str,
+        *,
+        successor_type: str | None = None,
+        successor_id: str | None = None,
+    ) -> WorkRequest:
+        current = await self.get_work_request(request_id)
+        lifecycle_adapter_for(current).assert_completion(
+            current,
+            actor,
+            successor_type,
+            successor_id,
+        )
+        return await self.append_work_event(
+            request_id,
+            WORK_REQUEST_COMPLETED,
+            actor,
+            {
+                **({"successor_type": successor_type} if successor_type else {}),
+                **({"successor_id": successor_id} if successor_id else {}),
+            },
+        )
+
+    async def handoff_work_request(
+        self,
+        source_request_id: str,
+        actor: str,
+        created_data: dict[str, Any],
+    ) -> tuple[WorkRequest, WorkRequest]:
+        """Atomically complete one task and create its configured successor."""
+        successor = work_request_from_created(created_data)
+        actual_id = _record_id(source_request_id)
+        if successor.parent_request_id != actual_id:
+            raise ConfigurationError("Successor does not reference its source work request")
+        if successor.channel_id not in await self.registered_operation_channel_ids():
+            raise ConfigurationError("The selected channel is not a registered operating channel")
+        async with self.database.session() as session, session.begin():
+            source_record = await session.scalar(
+                select(WorkRequestRecord).where(WorkRequestRecord.id == actual_id).with_for_update()
+            )
+            if source_record is None:
+                raise EntityNotFoundError(f"Work request not found: {actual_id}")
+            source = await self._work_request_from_record(session, source_record)
+            lifecycle_adapter_for(source).assert_completion(
+                source,
+                actor,
+                f"{successor.kind.value}_WORK_REQUEST",
+                successor.id,
+            )
+            candidate = copy.deepcopy(source)
+            occurred_at = _utc_now()
+            apply_work_event(
+                candidate,
+                WORK_REQUEST_COMPLETED,
+                actor,
+                occurred_at,
+                {
+                    "successor_type": f"{successor.kind.value}_WORK_REQUEST",
+                    "successor_id": successor.id,
+                },
+            )
+            successor_summary = work_request_summary(successor)
+            successor_record = WorkRequestRecord(
+                id=successor.id,
+                reference_number=successor.reference_number,
+                kind=successor.kind.value,
+                requester_slack_user_id=successor.requester_slack_user_id,
+                originator_slack_user_id=successor.originator_slack_user_id,
+                assignee_slack_user_id=successor.assignee_slack_user_id,
+                case_id=successor.case_id,
+                parent_request_id=successor.parent_request_id,
+                channel_id=successor.channel_id,
+                status=successor.status.value,
+                current_step_order=successor.current_step_order,
+                current_approver_slack_user_ids=successor_summary[
+                    "current_approver_slack_user_ids"
+                ],
+                event_version=1,
+                created_at=successor.created_at,
+                updated_at=successor.created_at,
+            )
+            session.add_all(
+                (
+                    successor_record,
+                    WorkRequestEventRecord(
+                        request_id=successor.id,
+                        sequence=1,
+                        kind=WORK_REQUEST_CREATED,
+                        actor_slack_user_id=actor,
+                        payload=copy.deepcopy(created_data),
+                        occurred_at=successor.created_at,
+                    ),
+                    WorkRequestEventRecord(
+                        request_id=actual_id,
+                        sequence=source_record.event_version + 1,
+                        kind=WORK_REQUEST_COMPLETED,
+                        actor_slack_user_id=actor,
+                        payload={
+                            "successor_type": f"{successor.kind.value}_WORK_REQUEST",
+                            "successor_id": successor.id,
+                        },
+                        occurred_at=occurred_at,
+                    ),
+                )
+            )
+            source_record.event_version += 1
+            self._work_projection(source_record, candidate)
+        return candidate, successor
+
+    async def list_active_work_for_user(self, slack_user_id: str) -> list[WorkRequest]:
+        active = {
+            WorkRequestStatus.IN_APPROVAL.value,
+            WorkRequestStatus.ACTION_REQUIRED.value,
+            WorkRequestStatus.OPEN.value,
+        }
+        async with self.database.session() as session:
+            records = list(
+                await session.scalars(
+                    select(WorkRequestRecord)
+                    .where(
+                        WorkRequestRecord.status.in_(active),
+                        or_(
+                            WorkRequestRecord.requester_slack_user_id == slack_user_id,
+                            WorkRequestRecord.originator_slack_user_id == slack_user_id,
+                        ),
+                    )
+                    .order_by(WorkRequestRecord.updated_at.desc())
+                    .limit(50)
+                )
+            )
+            return await self._work_requests_from_records(session, records)
+
+    async def list_actionable_work_for_actor(self, slack_user_id: str) -> list[WorkRequest]:
+        async with self.database.session() as session:
+            candidates = list(
+                await session.scalars(
+                    select(WorkRequestRecord)
+                    .where(
+                        WorkRequestRecord.status.in_(
+                            {
+                                WorkRequestStatus.IN_APPROVAL.value,
+                                WorkRequestStatus.ACTION_REQUIRED.value,
+                                WorkRequestStatus.OPEN.value,
+                            }
+                        )
+                    )
+                    .order_by(WorkRequestRecord.updated_at.desc())
+                    .limit(500)
+                )
+            )
+            records = [
+                record
+                for record in candidates
+                if (
+                    record.status == WorkRequestStatus.IN_APPROVAL.value
+                    and slack_user_id in record.current_approver_slack_user_ids
+                )
+                or (
+                    record.status
+                    in {
+                        WorkRequestStatus.ACTION_REQUIRED.value,
+                        WorkRequestStatus.OPEN.value,
+                    }
+                    and record.assignee_slack_user_id == slack_user_id
+                )
+            ]
+            return await self._work_requests_from_records(session, records)
 
     async def update_work_request_view(
         self, request: WorkRequest, *, text: str, blocks: list[dict]
@@ -549,18 +789,63 @@ class LedgerRepository:
             route = await session.get(ApprovalRouteRecord, (department_id, category_id))
         approval_channel_id = route.approval_channel_id if route else None
         version = route.version if route else 0
-        channel_members = (
-            await self.channel_member_ids(approval_channel_id) if approval_channel_id else set()
+        resolved = (
+            await self.resolve_approval_workflow(workflow.id, approval_channel_id)
+            if approval_channel_id
+            else ResolvedApprovalWorkflow(
+                id=workflow.id,
+                name_en=workflow.name_en,
+                name_ko=workflow.name_ko,
+                steps=tuple(
+                    ApprovalRuleStep(
+                        name_en=step.name_en,
+                        name_ko=step.name_ko,
+                        approver_slack_user_ids=(),
+                        approver_roles=step.approver_roles,
+                    )
+                    for step in workflow.steps
+                ),
+            )
         )
-        assignments = await self.role_assignments()
-        workspace = assignments[WORKSPACE_ROLE_SCOPE]
-        steps = []
+        return ApprovalRule(
+            department_id=department_id,
+            budget_program_id=category.budget_program_id,
+            category_id=category_id,
+            approval_channel_id=approval_channel_id,
+            steps=resolved.steps,
+            workflow_id=workflow.id,
+            workflow_name_en=workflow.name_en,
+            workflow_name_ko=workflow.name_ko,
+            version=version,
+        )
+
+    async def resolve_approval_workflow(
+        self,
+        workflow_id: str,
+        channel_id: str,
+        *,
+        actor_bindings: dict[str, set[str]] | None = None,
+    ) -> ResolvedApprovalWorkflow:
+        """Resolve a code-defined workflow without knowing which entity will use it."""
+        workflow = workflow_by_id(workflow_id)
+        if workflow is None:
+            raise EntityNotFoundError(f"Approval workflow not found: {workflow_id}")
+        channel_members = await self.channel_member_ids(channel_id)
+        workspace = (await self.role_assignments())[WORKSPACE_ROLE_SCOPE]
+        bindings = actor_bindings or {}
+        resolved_steps: list[ApprovalRuleStep] = []
         for step in workflow.steps:
-            approvers: set[str] = set()
+            role_members: set[str] = set()
             for role in step.approver_roles:
-                approvers.update(workspace.get(role, set()))
+                role_members.update(workspace.get(role, set()))
+            if step.actor_binding:
+                approvers = set(bindings.get(step.actor_binding, set()))
+                if step.approver_roles:
+                    approvers.intersection_update(role_members)
+            else:
+                approvers = role_members
             approvers.intersection_update(channel_members)
-            steps.append(
+            resolved_steps.append(
                 ApprovalRuleStep(
                     name_en=step.name_en,
                     name_ko=step.name_ko,
@@ -568,16 +853,11 @@ class LedgerRepository:
                     approver_roles=step.approver_roles,
                 )
             )
-        return ApprovalRule(
-            department_id=department_id,
-            budget_program_id=category.budget_program_id,
-            category_id=category_id,
-            approval_channel_id=approval_channel_id,
-            steps=tuple(steps),
-            workflow_id=workflow.id,
-            workflow_name_en=workflow.name_en,
-            workflow_name_ko=workflow.name_ko,
-            version=version,
+        return ResolvedApprovalWorkflow(
+            id=workflow.id,
+            name_en=workflow.name_en,
+            name_ko=workflow.name_ko,
+            steps=tuple(resolved_steps),
         )
 
     async def save_approval_route(

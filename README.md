@@ -16,7 +16,9 @@ Slack UI
    ↓
 FastAPI + Slack Bolt
    ↓
-Domain workflow / validation
+Application work queue + lifecycle adapters
+   ↓
+N-step approval workflow / validation
    ↓
 SQLAlchemy repository
    ↓
@@ -42,12 +44,14 @@ $env:DATABASE_URL_UNPOOLED="postgresql://..."
 .venv\Scripts\alembic upgrade head
 ```
 
-마이그레이션 후 GitHub에 push하여 Vercel을 재배포합니다. 다음 응답이 모두 `ok`인지 확인합니다.
+마이그레이션 후 GitHub에 push하여 Vercel을 재배포합니다. 배포 확인 시 다음 응답이 모두 `ok`인지 확인합니다.
 
 ```text
 https://kaist-aci-erp.vercel.app/health
 https://kaist-aci-erp.vercel.app/ready
 ```
+
+상시 uptime 모니터링은 DB를 깨우지 않는 `/health`만 사용합니다. `/ready`는 실제 DB 쿼리를 하므로 주기적으로 호출하지 않습니다.
 
 기존 Slack System Config snapshot을 옮길 때만 아래 일회성 명령을 사용합니다.
 

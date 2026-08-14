@@ -6,7 +6,9 @@ from pydantic import ValidationError
 from app.config.roles import SYSTEM_ADMIN_ROLE, WORKSPACE_ROLE_SCOPE, default_role_assignments
 from app.domain.catalog import department_by_id
 from app.domain.enums import WorkRequestKind, WorkRequestStatus
+from app.domain.models import ApprovalRuleStep, ResolvedApprovalWorkflow
 from app.domain.work_requests import (
+    WORK_APPROVAL_STEP_APPROVED,
     purchase_created_data,
     settlement_created_data,
     work_request_from_created,
@@ -21,6 +23,7 @@ from app.slack.modals import (
     settlement_request_modal,
 )
 from app.work_requests import CreatePurchaseRequestCommand, CreateSettlementRequestCommand
+from tests.test_approval_workflow import make_created
 
 ROOT_ADMIN = next(iter(default_role_assignments()[WORKSPACE_ROLE_SCOPE][SYSTEM_ADMIN_ROLE]))
 
@@ -45,6 +48,22 @@ def purchase_command() -> CreatePurchaseRequestCommand:
         quantity=2,
         estimated_amount="49000",
         purpose="수업 장비 연결",
+    )
+
+
+def purchase_workflow(*approvers: str) -> ResolvedApprovalWorkflow:
+    return ResolvedApprovalWorkflow(
+        id="purchase_payment_approval",
+        name_en="Purchase Payment Approval",
+        name_ko="구매 결제 승인",
+        steps=tuple(
+            ApprovalRuleStep(
+                name_en=f"Approval {index}",
+                name_ko=f"승인 {index}",
+                approver_slack_user_ids=(approver,),
+            )
+            for index, approver in enumerate(approvers, start=1)
+        ),
     )
 
 
@@ -76,16 +95,23 @@ def test_work_request_commands_require_https_urls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_purchase_request_round_trip_and_completion(slack_client, database) -> None:
+async def test_purchase_request_n_step_approval_and_settlement_handoff(
+    slack_client, database
+) -> None:
     department = department_by_id("department_1")
     ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     created = await ledger.create_work_request(
-        purchase_created_data(purchase_command(), department)
+        purchase_created_data(
+            purchase_command(),
+            department,
+            purchase_workflow("U_APPROVER_1", "U_PROF"),
+        )
     )
 
     assert created.kind == WorkRequestKind.PURCHASE
-    assert created.status == WorkRequestStatus.OPEN
+    assert created.status == WorkRequestStatus.IN_APPROVAL
+    assert created.current_step_order == 1
     assert created.subject == "USB-C hub"
     assert created.quantity == 2
     assert created.amount == 49000
@@ -93,11 +119,59 @@ async def test_purchase_request_round_trip_and_completion(slack_client, database
     with pytest.raises(ApprovalPermissionError):
         await ledger.complete_work_request(created.slack_locator, "U_STRANGER")
 
-    completed = await ledger.complete_work_request(created.slack_locator, "U_PROF")
-    assert completed.status == WorkRequestStatus.COMPLETED
-    assert completed.completed_by_slack_user_id == "U_PROF"
     with pytest.raises(InvalidStateTransitionError):
         await ledger.complete_work_request(created.slack_locator, "U_PROF")
+
+    approved_once = await ledger.append_work_event(
+        created.id,
+        WORK_APPROVAL_STEP_APPROVED,
+        "U_APPROVER_1",
+    )
+    assert approved_once.current_step_order == 2
+    approved = await ledger.append_work_event(
+        created.id,
+        WORK_APPROVAL_STEP_APPROVED,
+        "U_PROF",
+    )
+    assert approved.status == WorkRequestStatus.ACTION_REQUIRED
+
+    handoff_command = CreateSettlementRequestCommand(
+        requester_slack_user_id="U_PROF",
+        department_id="department_1",
+        assignee_slack_user_id="U_STUDENT",
+        channel_id="C_APPROVAL",
+        subject=approved.subject,
+        vendor="Coupang",
+        amount="49000",
+        payment_date=date(2026, 8, 14),
+        purpose=approved.purpose,
+        evidence_folder_url="https://drive.google.com/drive/folders/example",
+    )
+    handoff_data = settlement_created_data(
+        handoff_command,
+        department,
+        originator_slack_user_id=approved.originator_slack_user_id,
+        case_id=approved.case_id,
+        parent_request_id=approved.id,
+    )
+    completed, settlement = await ledger.handoff_work_request(
+        approved.id,
+        "U_PROF",
+        handoff_data,
+    )
+
+    assert completed.status == WorkRequestStatus.COMPLETED
+    assert settlement.status == WorkRequestStatus.ACTION_REQUIRED
+    assert settlement.parent_request_id == completed.id
+    assert settlement.case_id == completed.case_id
+    assert settlement.originator_slack_user_id == "U_STUDENT"
+    assert [item.id for item in await ledger.list_active_work_for_user("U_STUDENT")] == [
+        settlement.id
+    ]
+    assert [item.id for item in await ledger.list_active_work_for_user("U_PROF")] == [settlement.id]
+    assert [item.id for item in await ledger.list_actionable_work_for_actor("U_STUDENT")] == [
+        settlement.id
+    ]
 
 
 @pytest.mark.asyncio
@@ -112,6 +186,7 @@ async def test_settlement_assignment_is_stored_in_selected_channel(slack_client,
     assert created.kind == WorkRequestKind.SETTLEMENT
     assert created.channel_id == "C_DEPARTMENT_2"
     assert created.assignee_slack_user_id == "U_STUDENT"
+    assert created.status == WorkRequestStatus.ACTION_REQUIRED
     assert created.message_ts is None
     await ledger.update_work_request_view(created, text="Settlement", blocks=[])
     assert created.message_ts
@@ -120,6 +195,23 @@ async def test_settlement_assignment_is_stored_in_selected_channel(slack_client,
         for block in work_request_blocks(created)
         for element in block.get("elements", [])
     )
+    with pytest.raises(InvalidStateTransitionError):
+        await ledger.complete_work_request(created.id, "U_STUDENT")
+
+    expense_data = make_created(1)
+    expense_data["source_work_request_id"] = created.id
+    expense_data["case_id"] = created.case_id
+    expense = await ledger.create_request(expense_data)
+    completed = await ledger.complete_work_request(
+        created.id,
+        "U_STUDENT",
+        successor_type="EXPENSE_REQUEST",
+        successor_id=expense.id,
+    )
+    assert expense.source_work_request_id == created.id
+    assert expense.case_id == created.case_id
+    assert completed.successor_type == "EXPENSE_REQUEST"
+    assert completed.successor_id == expense.id
 
 
 def test_work_request_modals_and_department_prefill() -> None:

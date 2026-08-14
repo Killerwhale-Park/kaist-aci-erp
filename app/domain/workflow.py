@@ -6,6 +6,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from app.domain.approval_chain import (
+    approve_step,
+    assert_actor_can_approve_step,
+    pending_step,
+)
 from app.domain.enums import (
     ApplicantType,
     ApprovalStepStatus,
@@ -102,8 +107,11 @@ def created_event_data(
         )
 
     validate_https_url(command.evidence_folder_url, "evidence_folder")
+    effective_id = request_id or actual_id
     payload = {
-        "id": request_id or actual_id,
+        "id": effective_id,
+        "case_id": effective_id,
+        "source_work_request_id": None,
         "reference_number": reference_number or actual_reference,
         "applicant_slack_user_id": command.applicant_slack_user_id,
         "applicant_display_name": command.applicant_display_name,
@@ -242,6 +250,8 @@ def request_from_created(data: dict[str, Any]) -> ExpenseRequest:
         workflow_snapshot=copy.deepcopy(data["workflow"]),
         evidence_snapshot=copy.deepcopy(data["evidence"]),
         submitted_at=datetime.fromisoformat(data["submitted_at"]),
+        case_id=data.get("case_id"),
+        source_work_request_id=data.get("source_work_request_id"),
         department=department,
         budget_program=budget,
         category=category,
@@ -253,9 +263,7 @@ def request_from_created(data: dict[str, Any]) -> ExpenseRequest:
 def current_step(request: ExpenseRequest) -> ApprovalStep:
     if request.status != RequestStatus.IN_APPROVAL or request.current_step_order is None:
         raise InvalidStateTransitionError("Request is not awaiting approval")
-    return next(
-        step for step in request.approval_steps if step.step_order == request.current_step_order
-    )
+    return pending_step(request.approval_steps, request.current_step_order)
 
 
 def can_actor_approve(request: ExpenseRequest, actor: str) -> bool:
@@ -267,10 +275,9 @@ def can_actor_approve(request: ExpenseRequest, actor: str) -> bool:
 
 
 def assert_actor_can_approve(request: ExpenseRequest, actor: str) -> ApprovalStep:
-    step = current_step(request)
-    if actor not in {item.slack_user_id for item in step.approvers}:
-        raise ApprovalPermissionError("Actor is not assigned to the current step")
-    return step
+    if request.status != RequestStatus.IN_APPROVAL:
+        raise InvalidStateTransitionError("Request is not awaiting approval")
+    return assert_actor_can_approve_step(request.approval_steps, request.current_step_order, actor)
 
 
 def editable_event_data(command: EditExpenseCommand) -> dict[str, Any]:
@@ -309,18 +316,16 @@ def apply_event(
     event_time: datetime,
 ) -> None:
     if kind == APPROVAL_STEP_APPROVED:
-        step = assert_actor_can_approve(request, actor)
-        step.status = ApprovalStepStatus.APPROVED
-        step.acted_by_slack_user_id = actor
-        step.acted_at = event_time
-        next_step = next(
-            (item for item in request.approval_steps if item.step_order > step.step_order), None
+        if request.status != RequestStatus.IN_APPROVAL:
+            raise InvalidStateTransitionError("Request is not awaiting approval")
+        request.current_step_order = approve_step(
+            request.approval_steps,
+            request.current_step_order,
+            actor,
+            event_time,
         )
-        if next_step is not None:
-            next_step.status = ApprovalStepStatus.PENDING
-            request.current_step_order = next_step.step_order
+        if request.current_step_order is not None:
             return
-        request.current_step_order = None
         request.status = (
             RequestStatus.COMPLETED
             if required_post_evidence_complete(request.evidence_submissions)
@@ -431,9 +436,6 @@ def replay_events(events: list[dict[str, Any]], *, message_ts: str | None) -> Ex
 
 
 def request_summary(request: ExpenseRequest) -> dict[str, Any]:
-    approvers: list[str] = []
-    if request.status == RequestStatus.IN_APPROVAL:
-        approvers = [item.slack_user_id for item in current_step(request).approvers]
     return {
         "version": 1,
         "request_id": request.id,
@@ -442,7 +444,9 @@ def request_summary(request: ExpenseRequest) -> dict[str, Any]:
         "department_id": request.department_id,
         "category_id": request.category_id,
         "status": request.status.value,
-        "current_approver_slack_user_ids": approvers,
+        "current_approver_slack_user_ids": list(request.current_approver_slack_user_ids),
         "approval_channel_id": request.approval_channel_id,
+        "case_id": request.case_id,
+        "source_work_request_id": request.source_work_request_id,
         "revision": request.revision,
     }

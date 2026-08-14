@@ -6,13 +6,26 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+from app.domain.approval_chain import approve_step, assert_actor_can_approve_step, pending_step
 from app.domain.catalog import department_by_id
-from app.domain.enums import WorkRequestKind, WorkRequestStatus
-from app.domain.models import Department, WorkRequest
-from app.exceptions import ConfigurationError, InvalidStateTransitionError
+from app.domain.enums import ApprovalStepStatus, WorkRequestKind, WorkRequestStatus
+from app.domain.models import (
+    ApprovalStep,
+    ApprovalStepApprover,
+    Department,
+    ResolvedApprovalWorkflow,
+    WorkRequest,
+)
+from app.exceptions import (
+    ConfigurationError,
+    DomainError,
+    InvalidStateTransitionError,
+)
 from app.work_requests import CreatePurchaseRequestCommand, CreateSettlementRequestCommand
 
 WORK_REQUEST_CREATED = "WORK_REQUEST_CREATED"
+WORK_APPROVAL_STEP_APPROVED = "WORK_APPROVAL_STEP_APPROVED"
+WORK_REQUEST_REJECTED = "WORK_REQUEST_REJECTED"
 WORK_REQUEST_COMPLETED = "WORK_REQUEST_COMPLETED"
 
 
@@ -24,7 +37,9 @@ def _identity(kind: WorkRequestKind, now: datetime) -> tuple[str, str]:
 
 
 def purchase_created_data(
-    command: CreatePurchaseRequestCommand, department: Department
+    command: CreatePurchaseRequestCommand,
+    department: Department,
+    approval_workflow: ResolvedApprovalWorkflow,
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
     request_id, reference = _identity(WorkRequestKind.PURCHASE, now)
@@ -33,7 +48,10 @@ def purchase_created_data(
         "reference_number": reference,
         "kind": WorkRequestKind.PURCHASE.value,
         "requester_slack_user_id": command.requester_slack_user_id,
+        "originator_slack_user_id": command.requester_slack_user_id,
         "assignee_slack_user_id": command.assignee_slack_user_id,
+        "case_id": request_id,
+        "parent_request_id": None,
         "department_id": department.id,
         "channel_id": command.channel_id,
         "subject": command.item_name,
@@ -44,12 +62,18 @@ def purchase_created_data(
         "vendor": None,
         "payment_date": None,
         "evidence_folder_url": None,
+        "workflow": _workflow_snapshot(approval_workflow),
         "created_at": now.isoformat(),
     }
 
 
 def settlement_created_data(
-    command: CreateSettlementRequestCommand, department: Department
+    command: CreateSettlementRequestCommand,
+    department: Department,
+    *,
+    originator_slack_user_id: str | None = None,
+    case_id: str | None = None,
+    parent_request_id: str | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
     request_id, reference = _identity(WorkRequestKind.SETTLEMENT, now)
@@ -58,7 +82,10 @@ def settlement_created_data(
         "reference_number": reference,
         "kind": WorkRequestKind.SETTLEMENT.value,
         "requester_slack_user_id": command.requester_slack_user_id,
+        "originator_slack_user_id": (originator_slack_user_id or command.requester_slack_user_id),
         "assignee_slack_user_id": command.assignee_slack_user_id,
+        "case_id": case_id or request_id,
+        "parent_request_id": parent_request_id,
         "department_id": department.id,
         "channel_id": command.channel_id,
         "subject": command.subject,
@@ -69,26 +96,69 @@ def settlement_created_data(
         "vendor": command.vendor,
         "payment_date": command.payment_date.isoformat(),
         "evidence_folder_url": command.evidence_folder_url,
+        "workflow": [],
         "created_at": now.isoformat(),
     }
+
+
+def _workflow_snapshot(workflow: ResolvedApprovalWorkflow) -> list[dict[str, Any]]:
+    if not workflow.is_complete:
+        raise ConfigurationError("Work request approval workflow is incomplete")
+    return [
+        {
+            "step_order": order,
+            "name_en": step.name_en,
+            "name_ko": step.name_ko,
+            "approver_slack_user_ids": list(step.approver_slack_user_ids),
+            "approver_roles": list(step.approver_roles),
+            "workflow_id": workflow.id,
+        }
+        for order, step in enumerate(workflow.steps, start=1)
+    ]
 
 
 def work_request_from_created(data: dict[str, Any]) -> WorkRequest:
     department = department_by_id(data["department_id"])
     if department is None:
         raise ConfigurationError("Work request department is unavailable")
+    workflow = copy.deepcopy(data.get("workflow") or [])
+    steps = [
+        ApprovalStep(
+            step_order=int(item["step_order"]),
+            name_en=item["name_en"],
+            name_ko=item["name_ko"],
+            approvers=[
+                ApprovalStepApprover(slack_user_id=user_id)
+                for user_id in item["approver_slack_user_ids"]
+            ],
+            status=(
+                ApprovalStepStatus.PENDING
+                if int(item["step_order"]) == 1
+                else ApprovalStepStatus.WAITING
+            ),
+        )
+        for item in workflow
+    ]
     return WorkRequest(
         id=data["id"],
         reference_number=data["reference_number"],
         kind=WorkRequestKind(data["kind"]),
         requester_slack_user_id=data["requester_slack_user_id"],
+        originator_slack_user_id=data.get(
+            "originator_slack_user_id", data["requester_slack_user_id"]
+        ),
         assignee_slack_user_id=data["assignee_slack_user_id"],
+        case_id=data.get("case_id", data["id"]),
+        parent_request_id=data.get("parent_request_id"),
         department_id=department.id,
         channel_id=data["channel_id"],
         subject=data["subject"],
         purpose=data["purpose"],
         department=department,
         created_at=datetime.fromisoformat(data["created_at"]),
+        workflow_snapshot=workflow,
+        approval_steps=steps,
+        current_step_order=1 if steps else None,
         quantity=int(data["quantity"]) if data.get("quantity") is not None else None,
         amount=Decimal(data["amount"]) if data.get("amount") is not None else None,
         vendor=data.get("vendor"),
@@ -99,17 +169,63 @@ def work_request_from_created(data: dict[str, Any]) -> WorkRequest:
         ),
         source_url=data.get("source_url"),
         evidence_folder_url=data.get("evidence_folder_url"),
+        status=(WorkRequestStatus.IN_APPROVAL if steps else WorkRequestStatus.ACTION_REQUIRED),
     )
 
 
-def apply_work_event(request: WorkRequest, kind: str, actor: str, event_time: datetime) -> None:
-    if kind != WORK_REQUEST_COMPLETED:
-        raise InvalidStateTransitionError(f"Unsupported work request event: {kind}")
-    if request.status != WorkRequestStatus.OPEN:
-        raise InvalidStateTransitionError("Work request is already completed")
-    request.status = WorkRequestStatus.COMPLETED
-    request.completed_by_slack_user_id = actor
-    request.completed_at = event_time
+def current_work_approval_step(request: WorkRequest) -> ApprovalStep:
+    if request.status != WorkRequestStatus.IN_APPROVAL:
+        raise InvalidStateTransitionError("Work request is not awaiting approval")
+    return pending_step(request.approval_steps, request.current_step_order)
+
+
+def assert_actor_can_approve_work(request: WorkRequest, actor: str) -> ApprovalStep:
+    if request.status != WorkRequestStatus.IN_APPROVAL:
+        raise InvalidStateTransitionError("Work request is not awaiting approval")
+    return assert_actor_can_approve_step(request.approval_steps, request.current_step_order, actor)
+
+
+def apply_work_event(
+    request: WorkRequest,
+    kind: str,
+    actor: str,
+    event_time: datetime,
+    data: dict[str, Any] | None = None,
+) -> None:
+    if kind == WORK_APPROVAL_STEP_APPROVED:
+        if request.status != WorkRequestStatus.IN_APPROVAL:
+            raise InvalidStateTransitionError("Work request is not awaiting approval")
+        request.current_step_order = approve_step(
+            request.approval_steps,
+            request.current_step_order,
+            actor,
+            event_time,
+        )
+        if request.current_step_order is None:
+            request.status = WorkRequestStatus.ACTION_REQUIRED
+        return
+    if kind == WORK_REQUEST_REJECTED:
+        assert_actor_can_approve_work(request, actor)
+        reason = str((data or {}).get("reason") or "").strip()
+        if not reason:
+            raise InvalidStateTransitionError("Work request rejection requires a reason")
+        request.current_step_order = None
+        request.status = WorkRequestStatus.REJECTED
+        request.rejection_reason = reason
+        return
+    if kind == WORK_REQUEST_COMPLETED:
+        if request.status not in {
+            WorkRequestStatus.ACTION_REQUIRED,
+            WorkRequestStatus.OPEN,
+        }:
+            raise InvalidStateTransitionError("Work request is not ready to complete")
+        request.status = WorkRequestStatus.COMPLETED
+        request.completed_by_slack_user_id = actor
+        request.completed_at = event_time
+        request.successor_type = (data or {}).get("successor_type")
+        request.successor_id = (data or {}).get("successor_id")
+        return
+    raise InvalidStateTransitionError(f"Unsupported work request event: {kind}")
 
 
 def replay_work_events(events: list[dict[str, Any]], *, message_ts: str | None) -> WorkRequest:
@@ -128,8 +244,9 @@ def replay_work_events(events: list[dict[str, Any]], *, message_ts: str | None) 
                 event["kind"],
                 event.get("actor", ""),
                 datetime.fromisoformat(event["at"]),
+                event.get("data", {}),
             )
-        except InvalidStateTransitionError:
+        except DomainError:
             continue
     return request
 
@@ -141,8 +258,15 @@ def work_request_summary(request: WorkRequest) -> dict[str, Any]:
         "reference_number": request.reference_number,
         "kind": request.kind.value,
         "requester_slack_user_id": request.requester_slack_user_id,
+        "originator_slack_user_id": request.originator_slack_user_id,
         "assignee_slack_user_id": request.assignee_slack_user_id,
+        "case_id": request.case_id,
+        "parent_request_id": request.parent_request_id,
         "department_id": request.department_id,
         "status": request.status.value,
+        "current_step_order": request.current_step_order,
+        "current_approver_slack_user_ids": list(request.current_approver_slack_user_ids),
+        "successor_type": request.successor_type,
+        "successor_id": request.successor_id,
         "channel_id": request.channel_id,
     }

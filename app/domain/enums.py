@@ -55,5 +55,9 @@ class WorkRequestKind(StrEnum):
 
 
 class WorkRequestStatus(StrEnum):
+    IN_APPROVAL = "IN_APPROVAL"
+    ACTION_REQUIRED = "ACTION_REQUIRED"
+    REJECTED = "REJECTED"
+    # Retained for replaying work requests created before approval chains were introduced.
     OPEN = "OPEN"
     COMPLETED = "COMPLETED"

@@ -18,7 +18,7 @@ from app.domain.models import (
     WorkRequest,
 )
 from app.i18n import display_name, t
-from app.slack.messages import request_message_blocks
+from app.slack.messages import request_message_blocks, work_request_blocks
 from app.slack.utils import input_element
 
 
@@ -278,8 +278,13 @@ def purchase_request_modal(departments: Iterable[Department]) -> dict:
     }
 
 
-def settlement_request_modal(departments: Iterable[Department]) -> dict:
-    blocks = _work_request_base_blocks(departments)
+def settlement_request_modal(
+    departments: Iterable[Department],
+    *,
+    source_purchase: WorkRequest | None = None,
+) -> dict:
+    department_list = list(departments)
+    blocks = _work_request_base_blocks(department_list)
     blocks[1:1] = [
         {
             "type": "input",
@@ -333,12 +338,44 @@ def settlement_request_modal(departments: Iterable[Department]) -> dict:
             },
         ]
     )
+    if source_purchase is not None:
+        selected_department = next(
+            (item for item in department_list if item.id == source_purchase.department_id),
+            None,
+        )
+        if selected_department is not None:
+            blocks[0]["element"]["initial_option"] = _option(
+                selected_department.id,
+                selected_department.name_en,
+                selected_department.name_ko,
+            )
+        blocks[2]["element"]["initial_conversation"] = source_purchase.channel_id
+        initial_values = {
+            "work_subject": source_purchase.subject,
+            "work_amount": (
+                str(source_purchase.amount) if source_purchase.amount is not None else None
+            ),
+            "work_purpose": source_purchase.purpose,
+        }
+        for block in blocks:
+            value = initial_values.get(block.get("block_id"))
+            if value:
+                block["element"]["initial_value"] = value
     return {
         "type": "modal",
-        "callback_id": "settlement_request_create",
+        "callback_id": (
+            "purchase_settlement_handoff"
+            if source_purchase is not None
+            else "settlement_request_create"
+        ),
         "title": {"type": "plain_text", "text": t("settlement_title")},
         "submit": {"type": "plain_text", "text": t("send_request")},
         "close": {"type": "plain_text", "text": t("cancel")},
+        **(
+            {"private_metadata": json.dumps({"source_request_id": source_purchase.id})}
+            if source_purchase is not None
+            else {}
+        ),
         "blocks": blocks,
     }
 
@@ -414,6 +451,35 @@ def request_details_modal(request: ExpenseRequest) -> dict:
         "title": {"type": "plain_text", "text": t("request_details")},
         "close": {"type": "plain_text", "text": t("close")},
         "blocks": request_message_blocks(request, include_actions=False),
+    }
+
+
+def work_request_details_modal(request: WorkRequest) -> dict:
+    return {
+        "type": "modal",
+        "callback_id": "work_request_details",
+        "title": {"type": "plain_text", "text": t("work_requests")},
+        "close": {"type": "plain_text", "text": t("close")},
+        "blocks": work_request_blocks(request, include_actions=False),
+    }
+
+
+def work_request_rejection_modal(request_id: str) -> dict:
+    return {
+        "type": "modal",
+        "callback_id": "work_request_rejection",
+        "private_metadata": json.dumps({"request_id": request_id}),
+        "title": {"type": "plain_text", "text": t("decision_title")},
+        "submit": {"type": "plain_text", "text": t("reject")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": [
+            {
+                "type": "input",
+                "block_id": "decision_reason",
+                "label": {"type": "plain_text", "text": t("reason")},
+                "element": input_element("value", multiline=True),
+            }
+        ],
     }
 
 

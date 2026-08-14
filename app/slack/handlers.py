@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Any
@@ -5,7 +6,9 @@ from typing import Any
 from pydantic import ValidationError
 from slack_sdk.errors import SlackApiError
 
+from app.application.work_items import build_user_work_queue
 from app.config.roles import SYSTEM_ADMIN_ROLE, WORKSPACE_ROLE_SCOPE, role_definitions
+from app.config.work_request_policies import work_request_policy
 from app.database import Database
 from app.domain.catalog import (
     budget_by_id,
@@ -27,7 +30,13 @@ from app.domain.enums import (
     WorkRequestStatus,
 )
 from app.domain.models import ApprovalRule, ApprovalRuleStep, ExpenseRequest, UserProfile
-from app.domain.work_requests import purchase_created_data, settlement_created_data
+from app.domain.work_requests import (
+    WORK_APPROVAL_STEP_APPROVED,
+    WORK_REQUEST_REJECTED,
+    assert_actor_can_approve_work,
+    purchase_created_data,
+    settlement_created_data,
+)
 from app.domain.workflow import (
     APPROVAL_STEP_APPROVED,
     CHANGES_REQUESTED,
@@ -77,6 +86,8 @@ from app.slack.modals import (
     role_configuration_modal,
     settlement_request_modal,
     system_channels_modal,
+    work_request_details_modal,
+    work_request_rejection_modal,
 )
 from app.slack.utils import state_selected_conversations, state_selected_users, state_value
 from app.work_requests import CreatePurchaseRequestCommand, CreateSettlementRequestCommand
@@ -109,18 +120,37 @@ def register_handlers(slack_app, database: Database) -> None:
 
     async def publish_home(client, slack_user_id: str) -> None:
         ledger = repository(client)
-        admins = await ledger.system_admin_ids()
-        can_assign_settlement = slack_user_id in await ledger.settlement_assigner_ids()
+        (
+            admins,
+            settlement_assigners,
+            own_expenses,
+            pending_expense_approvals,
+            submitted_work_requests,
+            actionable_work_requests,
+        ) = await asyncio.gather(
+            ledger.system_admin_ids(),
+            ledger.settlement_assigner_ids(),
+            ledger.list_active_for_applicant(slack_user_id),
+            ledger.list_pending_for_actor(slack_user_id),
+            ledger.list_active_work_for_user(slack_user_id),
+            ledger.list_actionable_work_for_actor(slack_user_id),
+        )
         profile = UserProfile(
             slack_user_id=slack_user_id,
             role=(UserRole.SYSTEM_ADMIN if slack_user_id in admins else UserRole.REQUESTER),
         )
+        work_queue = build_user_work_queue(
+            slack_user_id,
+            own_expenses=own_expenses,
+            pending_expense_approvals=pending_expense_approvals,
+            submitted_work_requests=submitted_work_requests,
+            actionable_work_requests=actionable_work_requests,
+        )
         view = app_home_view(
             profile,
             budgets(),
-            await ledger.list_for_applicant(slack_user_id),
-            await ledger.list_pending_for_actor(slack_user_id),
-            can_assign_settlement,
+            work_queue,
+            slack_user_id in settlement_assigners,
             can_submit_requests=True,
         )
         await client.views_publish(user_id=slack_user_id, view=view)
@@ -196,7 +226,7 @@ def register_handlers(slack_app, database: Database) -> None:
 
     async def send_ephemeral(client, body: dict, text: str, respond=None) -> None:
         try:
-            if respond is not None:
+            if respond is not None and body.get("response_url"):
                 await respond(text=text, response_type="ephemeral", replace_original=False)
                 return
             channel_id = body.get("channel", {}).get("id") or body.get("container", {}).get(
@@ -555,8 +585,32 @@ def register_handlers(slack_app, database: Database) -> None:
             return
         try:
             ledger = repository(client)
-            request = await ledger.create_work_request(purchase_created_data(command, department))
+            policy = work_request_policy(WorkRequestKind.PURCHASE)
+            if policy.approval_workflow_id is None:
+                raise ConfigurationError("Purchase approval workflow is not configured")
+            workflow = await ledger.resolve_approval_workflow(
+                policy.approval_workflow_id,
+                command.channel_id,
+                actor_bindings={
+                    "payment_assignee": {command.assignee_slack_user_id},
+                },
+            )
+            if not workflow.is_complete:
+                await ack(
+                    response_action="errors",
+                    errors={"purchase_assignee": t("approval_configuration_required")},
+                )
+                return
+            request = await ledger.create_work_request(
+                purchase_created_data(command, department, workflow)
+            )
             request = await synchronize_work_request_message(client, request)
+        except EntityNotFoundError:
+            await ack(
+                response_action="errors",
+                errors={"purchase_assignee": t("approval_configuration_required")},
+            )
+            return
         except ConfigurationError:
             await ack(
                 response_action="errors",
@@ -668,6 +722,232 @@ def register_handlers(slack_app, database: Database) -> None:
             work_request_blocks(request),
         )
 
+    @slack_app.action("view_work_request")
+    async def view_work_request(ack, body, client):
+        actor = body["user"]["id"]
+        try:
+            ledger = repository(client)
+            request = await ledger.get_work_request(body["actions"][0]["value"])
+            allowed = {
+                request.requester_slack_user_id,
+                request.originator_slack_user_id,
+                request.assignee_slack_user_id,
+                *request.current_approver_slack_user_ids,
+                *(await ledger.system_admin_ids()),
+            }
+            if actor not in allowed:
+                raise ApprovalPermissionError
+            await safe_open_modal(
+                client,
+                body["trigger_id"],
+                work_request_details_modal(request),
+                actor,
+            )
+        except (ApprovalPermissionError, EntityNotFoundError):
+            await ack()
+            await safe_dm(client, actor, t("unauthorized"))
+            return
+        await ack()
+
+    @slack_app.action("approve_work_request")
+    async def approve_work_request(ack, body, client, respond):
+        await ack()
+        actor = body["user"]["id"]
+        try:
+            request = await repository(client).append_work_event(
+                body["actions"][0]["value"],
+                WORK_APPROVAL_STEP_APPROVED,
+                actor,
+            )
+            await synchronize_work_request_message(client, request)
+            await publish_home(client, actor)
+            if request.status == WorkRequestStatus.ACTION_REQUIRED:
+                await safe_dm(
+                    client,
+                    request.assignee_slack_user_id,
+                    t("purchase_payment_ready", reference=request.reference_number),
+                    work_request_blocks(request),
+                )
+        except ApprovalPermissionError:
+            await send_ephemeral(client, body, t("unauthorized"), respond)
+        except (EntityNotFoundError, InvalidStateTransitionError):
+            await send_ephemeral(client, body, t("invalid_state"), respond)
+
+    @slack_app.action("reject_work_request")
+    async def reject_work_request(ack, body, client):
+        actor = body["user"]["id"]
+        try:
+            request_id = body["actions"][0]["value"]
+            assert_actor_can_approve_work(
+                await repository(client).get_work_request(request_id), actor
+            )
+            await safe_open_modal(
+                client,
+                body["trigger_id"],
+                work_request_rejection_modal(request_id),
+                actor,
+            )
+        except (EntityNotFoundError, InvalidStateTransitionError):
+            await ack()
+            await safe_dm(client, actor, t("invalid_state"))
+            return
+        except ApprovalPermissionError:
+            await ack()
+            await safe_dm(client, actor, t("unauthorized"))
+            return
+        await ack()
+
+    @slack_app.view("work_request_rejection")
+    async def submit_work_request_rejection(ack, body, client):
+        actor = body["user"]["id"]
+        metadata = json.loads(body["view"]["private_metadata"])
+        reason = state_value(body["view"]["state"], "decision_reason") or ""
+        if not reason.strip():
+            await ack(
+                response_action="errors",
+                errors={"decision_reason": t("reason_required")},
+            )
+            return
+        try:
+            request = await repository(client).append_work_event(
+                metadata["request_id"],
+                WORK_REQUEST_REJECTED,
+                actor,
+                {"reason": reason},
+            )
+            await ack()
+        except ApprovalPermissionError:
+            await ack(
+                response_action="errors",
+                errors={"decision_reason": t("unauthorized")},
+            )
+            return
+        except (EntityNotFoundError, InvalidStateTransitionError):
+            await ack(
+                response_action="errors",
+                errors={"decision_reason": t("invalid_state")},
+            )
+            return
+        await synchronize_work_request_message(client, request)
+        await safe_dm(
+            client,
+            request.requester_slack_user_id,
+            t("purchase_rejected", reference=request.reference_number),
+        )
+        await publish_home(client, actor)
+
+    @slack_app.action("handoff_purchase_to_settlement")
+    async def handoff_purchase_to_settlement(ack, body, client):
+        actor = body["user"]["id"]
+        try:
+            request = await repository(client).get_work_request(body["actions"][0]["value"])
+            if (
+                request.kind != WorkRequestKind.PURCHASE
+                or request.status not in {WorkRequestStatus.ACTION_REQUIRED, WorkRequestStatus.OPEN}
+                or request.assignee_slack_user_id != actor
+            ):
+                raise ApprovalPermissionError
+            await safe_open_modal(
+                client,
+                body["trigger_id"],
+                settlement_request_modal(departments(), source_purchase=request),
+                actor,
+            )
+        except (ApprovalPermissionError, EntityNotFoundError):
+            await ack()
+            await safe_dm(client, actor, t("unauthorized"))
+            return
+        await ack()
+
+    @slack_app.view("purchase_settlement_handoff")
+    async def submit_purchase_settlement_handoff(ack, body, client):
+        actor = body["user"]["id"]
+        state = body["view"]["state"]
+        metadata = json.loads(body["view"]["private_metadata"])
+        ledger = repository(client)
+        try:
+            source = await ledger.get_work_request(metadata["source_request_id"])
+            command = CreateSettlementRequestCommand(
+                requester_slack_user_id=actor,
+                department_id=state_value(state, "work_department"),
+                assignee_slack_user_id=state_value(state, "settlement_assignee"),
+                channel_id=state_value(state, "work_channel"),
+                subject=state_value(state, "work_subject"),
+                vendor=state_value(state, "work_vendor"),
+                amount=state_value(state, "work_amount"),
+                payment_date=state_value(state, "work_payment_date"),
+                purpose=state_value(state, "work_purpose"),
+                evidence_folder_url=state_value(state, "work_evidence_folder"),
+            )
+            department = department_by_id(command.department_id)
+            if (
+                department is None
+                or source.kind != WorkRequestKind.PURCHASE
+                or source.department_id != command.department_id
+                or source.assignee_slack_user_id != actor
+            ):
+                raise ConfigurationError
+            await ledger.assert_channel_member(actor, command.channel_id)
+            created_data = settlement_created_data(
+                command,
+                department,
+                originator_slack_user_id=source.originator_slack_user_id,
+                case_id=source.case_id,
+                parent_request_id=source.id,
+            )
+        except ValidationError as error:
+            field_blocks = {
+                "department_id": "work_department",
+                "assignee_slack_user_id": "settlement_assignee",
+                "channel_id": "work_channel",
+                "subject": "work_subject",
+                "vendor": "work_vendor",
+                "amount": "work_amount",
+                "payment_date": "work_payment_date",
+                "purpose": "work_purpose",
+                "evidence_folder_url": "work_evidence_folder",
+            }
+            await ack(
+                response_action="errors",
+                errors={
+                    field_blocks.get(str(issue["loc"][0]), str(issue["loc"][0])): (
+                        t("https_required")
+                        if str(issue["loc"][0]) == "evidence_folder_url"
+                        else t("validation_error")
+                    )
+                    for issue in error.errors()
+                },
+            )
+            return
+        except (ApprovalPermissionError, ConfigurationError, EntityNotFoundError):
+            await ack(
+                response_action="errors",
+                errors={"work_department": t("invalid_state")},
+            )
+            return
+        try:
+            source, successor = await ledger.handoff_work_request(
+                source.id,
+                actor,
+                created_data,
+            )
+            await ack()
+            await synchronize_work_request_message(client, source)
+            await synchronize_work_request_message(client, successor)
+            await safe_dm(
+                client,
+                successor.assignee_slack_user_id,
+                t("settlement_assignment_notice", reference=successor.reference_number),
+                work_request_blocks(successor),
+            )
+            await publish_home(client, actor)
+        except Exception:
+            logger.exception("Failed to hand off purchase to settlement")
+            await ack(
+                response_action="errors",
+                errors={"work_channel": t("submission_error")},
+            )
+
     @slack_app.action("start_assigned_settlement")
     async def start_assigned_settlement(ack, body, client):
         actor = body["user"]["id"]
@@ -675,7 +955,10 @@ def register_handlers(slack_app, database: Database) -> None:
             request = await repository(client).get_work_request(body["actions"][0]["value"])
             if actor != request.assignee_slack_user_id:
                 raise ApprovalPermissionError
-            if request.status != WorkRequestStatus.OPEN:
+            if request.status not in {
+                WorkRequestStatus.ACTION_REQUIRED,
+                WorkRequestStatus.OPEN,
+            }:
                 raise InvalidStateTransitionError
         except (ApprovalPermissionError, EntityNotFoundError):
             await ack()
@@ -811,7 +1094,8 @@ def register_handlers(slack_app, database: Database) -> None:
                 source_work_request = await ledger.get_work_request(source_work_request_id)
                 if (
                     source_work_request.kind != WorkRequestKind.SETTLEMENT
-                    or source_work_request.status != WorkRequestStatus.OPEN
+                    or source_work_request.status
+                    not in {WorkRequestStatus.ACTION_REQUIRED, WorkRequestStatus.OPEN}
                     or source_work_request.assignee_slack_user_id != body["user"]["id"]
                     or source_work_request.department_id != department_id
                 ):
@@ -831,7 +1115,12 @@ def register_handlers(slack_app, database: Database) -> None:
             "budget_node_path": list(selected_path),
             "approval_rule": rule_as_context(rule),
             **(
-                {"source_work_request_id": source_work_request_id} if source_work_request_id else {}
+                {
+                    "source_work_request_id": source_work_request_id,
+                    "case_id": source_work_request.case_id,
+                }
+                if source_work_request_id and source_work_request
+                else {}
             ),
         }
         await ack(
@@ -876,6 +1165,9 @@ def register_handlers(slack_app, database: Database) -> None:
                 budget=budget,
                 category=category,
             )
+            if context.get("source_work_request_id"):
+                created["source_work_request_id"] = context["source_work_request_id"]
+                created["case_id"] = context.get("case_id")
             await ack()
         except ValidationError as error:
             await ack(response_action="errors", errors=pydantic_errors(error))
@@ -902,7 +1194,12 @@ def register_handlers(slack_app, database: Database) -> None:
             source_work_request_id = context.get("source_work_request_id")
             if source_work_request_id:
                 try:
-                    work_request = await ledger.complete_work_request(source_work_request_id, actor)
+                    work_request = await ledger.complete_work_request(
+                        source_work_request_id,
+                        actor,
+                        successor_type="EXPENSE_REQUEST",
+                        successor_id=request.id,
+                    )
                     await synchronize_work_request_message(client, work_request)
                 except (ApprovalPermissionError, InvalidStateTransitionError, EntityNotFoundError):
                     logger.exception("Expense submitted but assignment completion failed")

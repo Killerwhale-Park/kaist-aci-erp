@@ -77,6 +77,29 @@ async def test_channel_membership_scopes_global_roles(slack_client, database) ->
 
 
 @pytest.mark.asyncio
+async def test_bound_workflow_actor_must_have_role_and_channel_membership(
+    slack_client, database
+) -> None:
+    ledger = LedgerRepository(slack_client, database)
+    await ledger.replace_role_assignments(ROOT_ADMIN, role_configuration())
+
+    resolved = await ledger.resolve_approval_workflow(
+        "purchase_payment_approval",
+        "C_APPROVAL",
+        actor_bindings={"payment_assignee": {"U_PROFESSOR"}},
+    )
+    outside = await ledger.resolve_approval_workflow(
+        "purchase_payment_approval",
+        "C_APPROVAL",
+        actor_bindings={"payment_assignee": {"U_OUTSIDE_PROFESSOR"}},
+    )
+
+    assert resolved.is_complete
+    assert resolved.steps[0].approver_slack_user_ids == ("U_PROFESSOR",)
+    assert not outside.is_complete
+
+
+@pytest.mark.asyncio
 async def test_system_channels_use_database_and_slack_only_as_projection(
     slack_client, database
 ) -> None:

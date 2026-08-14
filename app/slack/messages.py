@@ -9,6 +9,7 @@ from app.domain.enums import (
     WorkRequestStatus,
 )
 from app.domain.models import ExpenseRequest, WorkRequest
+from app.domain.work_requests import current_work_approval_step
 from app.i18n import display_name, t
 from app.slack.utils import escape_mrkdwn
 
@@ -213,17 +214,19 @@ def work_request_fallback_text(request: WorkRequest) -> str:
     return f"{title} {request.reference_number}"
 
 
-def work_request_blocks(request: WorkRequest) -> list[dict]:
+def work_request_blocks(request: WorkRequest, *, include_actions: bool = True) -> list[dict]:
     title = (
         t("new_purchase_request")
         if request.kind == WorkRequestKind.PURCHASE
         else t("new_settlement_request")
     )
-    status = (
-        t("work_status_open")
-        if request.status == WorkRequestStatus.OPEN
-        else t("work_status_completed")
-    )
+    status = {
+        WorkRequestStatus.IN_APPROVAL: t("status_in_approval"),
+        WorkRequestStatus.ACTION_REQUIRED: t("work_status_action_required"),
+        WorkRequestStatus.OPEN: t("work_status_action_required"),
+        WorkRequestStatus.REJECTED: t("status_rejected"),
+        WorkRequestStatus.COMPLETED: t("work_status_completed"),
+    }[request.status]
     fields = [
         {"type": "mrkdwn", "text": f"*{t('requester')}*\n<@{request.requester_slack_user_id}>"},
         {"type": "mrkdwn", "text": f"*{t('assignee')}*\n<@{request.assignee_slack_user_id}>"},
@@ -265,6 +268,33 @@ def work_request_blocks(request: WorkRequest) -> list[dict]:
             },
         },
     ]
+    if request.status == WorkRequestStatus.IN_APPROVAL:
+        current = current_work_approval_step(request)
+        reviewers = ", ".join(f"<@{item.slack_user_id}>" for item in current.approvers)
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*{t('approval_progress')}*\n"
+                        f"{current.step_order}/{len(request.approval_steps)} · "
+                        f"{escape_mrkdwn(current.name_en)}\n\n"
+                        f"*{t('current_reviewer')}*\n{reviewers}"
+                    ),
+                },
+            }
+        )
+    elif request.status == WorkRequestStatus.REJECTED and request.rejection_reason:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{t('reason')}*\n{escape_mrkdwn(request.rejection_reason)}",
+                },
+            }
+        )
     if request.source_url:
         url = escape_mrkdwn(request.source_url)
         blocks.append(
@@ -284,9 +314,44 @@ def work_request_blocks(request: WorkRequest) -> list[dict]:
                 },
             }
         )
-    if request.status == WorkRequestStatus.OPEN:
+    if include_actions and request.status == WorkRequestStatus.IN_APPROVAL:
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": "approve_work_request",
+                        "style": "primary",
+                        "text": {"type": "plain_text", "text": t("approve")},
+                        "value": request.slack_locator,
+                    },
+                    {
+                        "type": "button",
+                        "action_id": "reject_work_request",
+                        "style": "danger",
+                        "text": {"type": "plain_text", "text": t("reject")},
+                        "value": request.slack_locator,
+                    },
+                ],
+            }
+        )
+    elif include_actions and request.status in {
+        WorkRequestStatus.ACTION_REQUIRED,
+        WorkRequestStatus.OPEN,
+    }:
         actions = []
-        if request.kind == WorkRequestKind.SETTLEMENT:
+        if request.kind == WorkRequestKind.PURCHASE:
+            actions.append(
+                {
+                    "type": "button",
+                    "action_id": "handoff_purchase_to_settlement",
+                    "style": "primary",
+                    "text": {"type": "plain_text", "text": t("payment_complete_handoff")},
+                    "value": request.slack_locator,
+                }
+            )
+        elif request.kind == WorkRequestKind.SETTLEMENT:
             actions.append(
                 {
                     "type": "button",
@@ -296,13 +361,5 @@ def work_request_blocks(request: WorkRequest) -> list[dict]:
                     "value": request.slack_locator,
                 }
             )
-        actions.append(
-            {
-                "type": "button",
-                "action_id": "complete_work_request",
-                "text": {"type": "plain_text", "text": t("mark_completed")},
-                "value": request.slack_locator,
-            }
-        )
         blocks.append({"type": "actions", "elements": actions})
     return blocks

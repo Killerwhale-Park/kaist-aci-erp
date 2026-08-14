@@ -26,8 +26,10 @@ STRINGS = {
     "requester": "Requester / 요청자",
     "assignee": "Assignee / 담당자",
     "mark_completed": "Mark Complete / 완료 처리",
+    "payment_complete_handoff": "Paid · Assign Settlement / 결제 완료 · 정산 인계",
     "start_settlement": "Start Expense / 정산 작성",
     "work_status_open": "Open / 처리 대기",
+    "work_status_action_required": "Action Required / 처리 필요",
     "work_status_completed": "Completed / 완료",
     "purchase_request_sent": (
         "Purchase request {reference} was sent.\n구매 요청 {reference}을 보냈습니다."
@@ -37,6 +39,13 @@ STRINGS = {
     ),
     "purchase_assignment_notice": (
         "You received purchase request {reference}.\n구매 요청 {reference}이 도착했습니다."
+    ),
+    "purchase_payment_ready": (
+        "Purchase request {reference} was approved. Complete payment and assign settlement.\n"
+        "구매 요청 {reference}이 승인되었습니다. 결제 후 정산 업무를 인계해 주세요."
+    ),
+    "purchase_rejected": (
+        "Purchase request {reference} was rejected.\n구매 요청 {reference}이 반려되었습니다."
     ),
     "settlement_assignment_notice": (
         "You received settlement request {reference}.\n정산 요청 {reference}이 도착했습니다."
@@ -87,7 +96,10 @@ STRINGS = {
     "coming_soon": "Coming Soon / 준비 중",
     "open": "Open / 신청",
     "my_requests": "My Requests / 내 신청",
+    "my_active_requests": "My Active Requests / 내가 올린 처리 중 요청",
+    "my_action_required": "My Action Items / 내가 처리할 요청",
     "no_requests": "No requests yet. / 아직 신청 내역이 없습니다.",
+    "no_action_required": "Nothing is waiting for you. / 지금 처리할 요청이 없습니다.",
     "view": "View / 보기",
     "edit_request": "Edit Request / 신청 수정",
     "resubmit": "Resubmit / 재제출",

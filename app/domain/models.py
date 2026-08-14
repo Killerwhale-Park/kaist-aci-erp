@@ -66,6 +66,7 @@ class ApprovalWorkflowStepDefinition:
     name_en: str
     name_ko: str
     approver_roles: tuple[str, ...]
+    actor_binding: str | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,18 @@ class ApprovalRuleStep:
 
 
 @dataclass(frozen=True)
+class ResolvedApprovalWorkflow:
+    id: str
+    name_en: str
+    name_ko: str
+    steps: tuple[ApprovalRuleStep, ...]
+
+    @property
+    def is_complete(self) -> bool:
+        return bool(self.steps) and all(step.approver_slack_user_ids for step in self.steps)
+
+
+@dataclass(frozen=True)
 class ApprovalRule:
     department_id: str
     budget_program_id: str
@@ -198,6 +211,8 @@ class ExpenseRequest:
     workflow_snapshot: list[dict]
     evidence_snapshot: list[dict]
     submitted_at: datetime
+    case_id: str | None
+    source_work_request_id: str | None
     department: Department
     budget_program: BudgetProgram
     category: ExpenseCategory
@@ -209,6 +224,18 @@ class ExpenseRequest:
     @property
     def slack_locator(self) -> str:
         return self.id
+
+    @property
+    def current_approver_slack_user_ids(self) -> tuple[str, ...]:
+        if self.status != RequestStatus.IN_APPROVAL or self.current_step_order is None:
+            return ()
+        step = next(
+            (item for item in self.approval_steps if item.step_order == self.current_step_order),
+            None,
+        )
+        if step is None:
+            return ()
+        return tuple(item.slack_user_id for item in step.approvers)
 
 
 @dataclass(frozen=True)
@@ -223,13 +250,19 @@ class WorkRequest:
     reference_number: str
     kind: WorkRequestKind
     requester_slack_user_id: str
+    originator_slack_user_id: str
     assignee_slack_user_id: str
+    case_id: str
+    parent_request_id: str | None
     department_id: str
     channel_id: str
     subject: str
     purpose: str
     department: Department
     created_at: datetime
+    workflow_snapshot: list[dict]
+    approval_steps: list[ApprovalStep]
+    current_step_order: int | None
     quantity: int | None = None
     amount: Decimal | None = None
     vendor: str | None = None
@@ -239,8 +272,23 @@ class WorkRequest:
     status: WorkRequestStatus = WorkRequestStatus.OPEN
     completed_by_slack_user_id: str | None = None
     completed_at: datetime | None = None
+    successor_type: str | None = None
+    successor_id: str | None = None
+    rejection_reason: str | None = None
     message_ts: str | None = None
 
     @property
     def slack_locator(self) -> str:
         return self.id
+
+    @property
+    def current_approver_slack_user_ids(self) -> tuple[str, ...]:
+        if self.status != WorkRequestStatus.IN_APPROVAL or self.current_step_order is None:
+            return ()
+        step = next(
+            (item for item in self.approval_steps if item.step_order == self.current_step_order),
+            None,
+        )
+        if step is None:
+            return ()
+        return tuple(item.slack_user_id for item in step.approvers)

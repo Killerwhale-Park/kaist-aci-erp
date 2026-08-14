@@ -227,6 +227,7 @@ def approval_workflows() -> list[ApprovalWorkflowDefinition]:
                     name_en=step.name_en,
                     name_ko=step.name_ko,
                     approver_roles=step.approver_roles,
+                    actor_binding=step.actor_binding,
                 )
                 for step in workflow.steps
             ),
@@ -262,3 +263,7 @@ def workflow_for_budget_node(
     if selected is None:
         return None
     return workflow_by_id.get(selected.workflow_id)
+
+
+def workflow_by_id(workflow_id: str) -> ApprovalWorkflowDefinition | None:
+    return next((item for item in approval_workflows() if item.id == workflow_id), None)

@@ -31,6 +31,10 @@ class ExpenseRequestRecord(Base):
     reference_number: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     applicant_slack_user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     approval_channel_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    case_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    source_work_request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("work_requests.id", ondelete="SET NULL"), index=True
+    )
     status: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
     current_approver_slack_user_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     slack_message_ts: Mapped[str | None] = mapped_column(String(32))
@@ -69,9 +73,16 @@ class WorkRequestRecord(Base):
     reference_number: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     kind: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
     requester_slack_user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    originator_slack_user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     assignee_slack_user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    case_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    parent_request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("work_requests.id", ondelete="SET NULL"), index=True
+    )
     channel_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    current_step_order: Mapped[int | None] = mapped_column(Integer)
+    current_approver_slack_user_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     slack_message_ts: Mapped[str | None] = mapped_column(String(32))
     event_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
