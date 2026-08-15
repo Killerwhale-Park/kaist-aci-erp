@@ -123,6 +123,17 @@ class RoleAssignmentRecord(Base):
     )
 
 
+class ApplicantProfileRecord(Base):
+    __tablename__ = "applicant_profiles"
+
+    slack_user_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    applicant_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    applicant_identifier: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
 class ApprovalRouteRecord(Base):
     __tablename__ = "approval_routes"
 

@@ -5,9 +5,9 @@ from app.domain.enums import (
     EvidenceSubmissionStatus,
     EvidenceTiming,
     RequestStatus,
-    UserRole,
 )
 from app.domain.models import (
+    ApplicantProfile,
     ApprovalRule,
     ApprovalStep,
     ApprovalStepApprover,
@@ -23,10 +23,10 @@ from app.domain.models import (
     ExpenseCategory,
     ExpenseForm,
     ExpenseRequest,
-    UserProfile,
 )
 
 __all__ = [
+    "ApplicantProfile",
     "ApplicantType",
     "ApprovalRule",
     "ApprovalStep",
@@ -48,6 +48,4 @@ __all__ = [
     "ExpenseForm",
     "ExpenseRequest",
     "RequestStatus",
-    "UserProfile",
-    "UserRole",
 ]

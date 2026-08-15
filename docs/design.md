@@ -22,6 +22,7 @@ Approval Workflow Configuration
 - `expense_events`: 생성·승인·반려·수정·사후 증빙의 append-only 이력
 - `work_requests`, `work_request_events`: 구매 요청과 정산 배정
 - `role_assignments`: 전역 업무 Role과 Slack 사용자 ID
+- `applicant_profiles`: 정산 양식에서 재사용하는 학생/교수 구분과 학번/사번
 - `approval_routes`: 학과·재원 항목과 승인 채널 연결
 - `system_settings`, `operating_channels`: 감사·경고·운영 채널
 - `audit_events`: 설정 변경과 운영 경고
@@ -70,6 +71,14 @@ App Home은 역할별 전용 화면이 아니라 사용자와 엔티티의 관�
 
 따라서 core 작업함과 승인 엔진에 교수·학생·행정팀 분기문을 추가하지 않습니다. 새 엔티티나 종료/인계 방식은 policy와 adapter를 추가해 확장합니다.
 
+Home의 조회 조립은 application 계층의 `UserDashboard`가 담당하고 Slack 계층은 Block Kit
+표현만 담당합니다. 같은 요청이 `내가 처리할 일`에 있으면 `진행 중인 요청`에는 중복 표시하지
+않습니다.
+
+`ApplicantProfile`은 신청자의 신분 정보만 보관합니다. 요청의 `department_id`는 회계·승인
+라우팅 문맥이므로 Profile과 합치지 않습니다. 이 분리는 단과대 예산처럼 신청자 소속 학과와
+양식·승인 경로가 무관한 경우를 보장합니다.
+
 ## Role과 채널
 
 Role 정의와 capability는 코드 기반 업무 정책입니다. 사람 교체는 `role_assignments`만 변경합니다.
@@ -79,7 +88,8 @@ Role 정의와 capability는 코드 기반 업무 정책입니다. 사람 교체
 - `ADMIN_STAFF`: 행정팀, 정산 배정 가능
 - `SYSTEM_ADMIN`: Role·채널·승인 route 관리
 
-실제 권한은 전역 Role 보유자와 해당 운영 채널 멤버의 교집합입니다. 일반 신청자는 별도 allowlist 없이 운영 채널 멤버십으로 판정합니다.
+실제 권한은 전역 Role 보유자와 해당 운영 채널 멤버의 교집합입니다. 신청자는
+`Eligible Requester` 자격과 운영 채널 멤버십을 모두 충족해야 합니다.
 
 ## Slack 채널
 

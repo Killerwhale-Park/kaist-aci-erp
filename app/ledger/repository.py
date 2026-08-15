@@ -7,8 +7,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from slack_sdk.errors import SlackApiError
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, case, delete, or_, select
 
+from app.application.dashboard import DashboardData
 from app.application.work_lifecycle import lifecycle_adapter_for
 from app.config.roles import (
     ASSIGN_SETTLEMENT,
@@ -22,8 +23,9 @@ from app.config.roles import (
 )
 from app.database import Database
 from app.domain.catalog import category_by_id, workflow_by_id, workflow_for_budget_node
-from app.domain.enums import RequestStatus, WorkRequestStatus
+from app.domain.enums import ApplicantType, RequestStatus, WorkRequestStatus
 from app.domain.models import (
+    ApplicantProfile,
     ApprovalRule,
     ApprovalRuleStep,
     ExpenseRequest,
@@ -51,6 +53,7 @@ from app.exceptions import (
     EntityNotFoundError,
 )
 from app.ledger.tables import (
+    ApplicantProfileRecord,
     ApprovalRouteRecord,
     AuditEventRecord,
     ExpenseEventRecord,
@@ -644,6 +647,173 @@ class LedgerRepository:
             ]
             return await self._work_requests_from_records(session, records)
 
+    async def dashboard_data(self, slack_user_id: str) -> DashboardData:
+        """Load the Home projection once, replaying each event stream at most once."""
+
+        expense_active = {
+            RequestStatus.IN_APPROVAL.value,
+            RequestStatus.CHANGES_REQUESTED.value,
+            RequestStatus.APPROVED_PENDING_POST_EVIDENCE.value,
+        }
+        work_active = {
+            WorkRequestStatus.IN_APPROVAL.value,
+            WorkRequestStatus.ACTION_REQUIRED.value,
+            WorkRequestStatus.OPEN.value,
+        }
+        async with self.database.session() as session:
+            role_rows = list(await session.scalars(select(RoleAssignmentRecord)))
+            profile_type, profile_identifier, manual_channel, route_channel = (
+                await session.execute(
+                    select(
+                        select(ApplicantProfileRecord.applicant_type)
+                        .where(ApplicantProfileRecord.slack_user_id == slack_user_id)
+                        .scalar_subquery(),
+                        select(ApplicantProfileRecord.applicant_identifier)
+                        .where(ApplicantProfileRecord.slack_user_id == slack_user_id)
+                        .scalar_subquery(),
+                        select(OperatingChannelRecord.channel_id).limit(1).scalar_subquery(),
+                        select(ApprovalRouteRecord.approval_channel_id).limit(1).scalar_subquery(),
+                    )
+                )
+            ).one()
+
+            expense_candidates = list(
+                await session.scalars(
+                    select(ExpenseRequestRecord)
+                    .where(
+                        or_(
+                            and_(
+                                ExpenseRequestRecord.applicant_slack_user_id == slack_user_id,
+                                ExpenseRequestRecord.status.in_(expense_active),
+                            ),
+                            ExpenseRequestRecord.status == RequestStatus.IN_APPROVAL.value,
+                        )
+                    )
+                    .order_by(
+                        case(
+                            (
+                                ExpenseRequestRecord.applicant_slack_user_id == slack_user_id,
+                                0,
+                            ),
+                            else_=1,
+                        ),
+                        ExpenseRequestRecord.updated_at.desc(),
+                    )
+                    .limit(500)
+                )
+            )
+            own_expense_records = [
+                record
+                for record in expense_candidates
+                if record.applicant_slack_user_id == slack_user_id
+                and record.status in expense_active
+            ][:50]
+            pending_expense_records = [
+                record
+                for record in expense_candidates
+                if record.status == RequestStatus.IN_APPROVAL.value
+                if slack_user_id in record.current_approver_slack_user_ids
+            ]
+            expense_records = list(
+                {
+                    record.id: record for record in [*own_expense_records, *pending_expense_records]
+                }.values()
+            )
+            expenses = await self._expenses_from_records(session, expense_records)
+            expenses_by_id = {request.id: request for request in expenses}
+
+            work_candidates = list(
+                await session.scalars(
+                    select(WorkRequestRecord)
+                    .where(
+                        WorkRequestRecord.status.in_(work_active),
+                        or_(
+                            WorkRequestRecord.requester_slack_user_id == slack_user_id,
+                            WorkRequestRecord.originator_slack_user_id == slack_user_id,
+                            WorkRequestRecord.assignee_slack_user_id == slack_user_id,
+                            WorkRequestRecord.status == WorkRequestStatus.IN_APPROVAL.value,
+                        ),
+                    )
+                    .order_by(
+                        case(
+                            (
+                                or_(
+                                    WorkRequestRecord.requester_slack_user_id == slack_user_id,
+                                    WorkRequestRecord.originator_slack_user_id == slack_user_id,
+                                    WorkRequestRecord.assignee_slack_user_id == slack_user_id,
+                                ),
+                                0,
+                            ),
+                            else_=1,
+                        ),
+                        WorkRequestRecord.updated_at.desc(),
+                    )
+                    .limit(500)
+                )
+            )
+            submitted_work_records = [
+                record
+                for record in work_candidates
+                if slack_user_id
+                in {
+                    record.requester_slack_user_id,
+                    record.originator_slack_user_id,
+                }
+            ][:50]
+            actionable_work_records = [
+                record
+                for record in work_candidates
+                if (
+                    record.status == WorkRequestStatus.IN_APPROVAL.value
+                    and slack_user_id in record.current_approver_slack_user_ids
+                )
+                or (
+                    record.status
+                    in {
+                        WorkRequestStatus.ACTION_REQUIRED.value,
+                        WorkRequestStatus.OPEN.value,
+                    }
+                    and record.assignee_slack_user_id == slack_user_id
+                )
+            ]
+            work_records = list(
+                {
+                    record.id: record
+                    for record in [*submitted_work_records, *actionable_work_records]
+                }.values()
+            )
+            work_requests = await self._work_requests_from_records(session, work_records)
+            work_by_id = {request.id: request for request in work_requests}
+
+        assignments = default_role_assignments()
+        workspace = assignments[WORKSPACE_ROLE_SCOPE]
+        for row in role_rows:
+            if row.scope == WORKSPACE_ROLE_SCOPE and row.role_id in workspace:
+                workspace[row.role_id].add(row.slack_user_id)
+        profile = (
+            ApplicantProfile(
+                slack_user_id=slack_user_id,
+                applicant_type=ApplicantType(profile_type),
+                applicant_identifier=profile_identifier,
+            )
+            if profile_type is not None and profile_identifier is not None
+            else None
+        )
+        return DashboardData(
+            assignments=assignments,
+            submission_configuration=(
+                bool(manual_channel or route_channel),
+                bool(route_channel),
+            ),
+            applicant_profile=profile,
+            own_expenses=[expenses_by_id[record.id] for record in own_expense_records],
+            pending_expense_approvals=[
+                expenses_by_id[record.id] for record in pending_expense_records
+            ],
+            submitted_work_requests=[work_by_id[record.id] for record in submitted_work_records],
+            actionable_work_requests=[work_by_id[record.id] for record in actionable_work_records],
+        )
+
     async def update_work_request_view(
         self, request: WorkRequest, *, text: str, blocks: list[dict]
     ) -> None:
@@ -942,6 +1112,57 @@ class LedgerRepository:
             if row.scope == WORKSPACE_ROLE_SCOPE and row.role_id in workspace:
                 workspace[row.role_id].add(row.slack_user_id)
         return assignments
+
+    async def applicant_profile(self, slack_user_id: str) -> ApplicantProfile | None:
+        async with self.database.session() as session:
+            record = await session.get(ApplicantProfileRecord, slack_user_id)
+        if record is None:
+            return None
+        return ApplicantProfile(
+            slack_user_id=record.slack_user_id,
+            applicant_type=ApplicantType(record.applicant_type),
+            applicant_identifier=record.applicant_identifier,
+        )
+
+    async def save_applicant_profile(
+        self,
+        actor: str,
+        *,
+        applicant_type: ApplicantType,
+        applicant_identifier: str,
+    ) -> ApplicantProfile:
+        identifier = applicant_identifier.strip()
+        if not identifier:
+            raise ConfigurationError("Applicant identifier is required")
+        async with self.database.session() as session, session.begin():
+            record = await session.get(ApplicantProfileRecord, actor)
+            if record is None:
+                record = ApplicantProfileRecord(
+                    slack_user_id=actor,
+                    applicant_type=applicant_type.value,
+                    applicant_identifier=identifier,
+                )
+                session.add(record)
+            else:
+                record.applicant_type = applicant_type.value
+                record.applicant_identifier = identifier
+                record.updated_at = _utc_now()
+            await self._audit(
+                session,
+                event_type="APPLICANT_PROFILE_UPDATED",
+                actor=actor,
+                entity_type="applicant_profile",
+                entity_id=actor,
+                summary="Applicant profile updated",
+                detail={
+                    "applicant_type": applicant_type.value,
+                },
+            )
+        return ApplicantProfile(
+            slack_user_id=actor,
+            applicant_type=applicant_type,
+            applicant_identifier=identifier,
+        )
 
     async def role_user_ids(self, role_id: str) -> set[str]:
         return set((await self.role_assignments())[WORKSPACE_ROLE_SCOPE].get(role_id, set()))

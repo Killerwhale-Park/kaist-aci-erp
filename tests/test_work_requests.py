@@ -2,11 +2,12 @@ from datetime import date
 
 import pytest
 from pydantic import ValidationError
+from slack_sdk.models.views import View
 
 from app.config.roles import SYSTEM_ADMIN_ROLE, WORKSPACE_ROLE_SCOPE, default_role_assignments
 from app.domain.catalog import department_by_id
-from app.domain.enums import WorkRequestKind, WorkRequestStatus
-from app.domain.models import ApprovalRuleStep, ResolvedApprovalWorkflow
+from app.domain.enums import ApplicantType, WorkRequestKind, WorkRequestStatus
+from app.domain.models import ApplicantProfile, ApprovalRuleStep, ResolvedApprovalWorkflow
 from app.domain.work_requests import (
     WORK_APPROVAL_STEP_APPROVED,
     purchase_created_data,
@@ -219,7 +220,10 @@ def test_work_request_modals_and_department_prefill() -> None:
     purchase = purchase_request_modal([department])
     settlement = settlement_request_modal([department])
     expense = expense_context_modal(
-        "U_STUDENT", [department], [], initial_department_id="department_3"
+        ApplicantProfile("U_STUDENT", ApplicantType.STUDENT, "202500001"),
+        [department],
+        [],
+        initial_department_id="department_3",
     )
 
     assert purchase["callback_id"] == "purchase_request_create"
@@ -227,6 +231,10 @@ def test_work_request_modals_and_department_prefill() -> None:
     assert all(len(view["blocks"]) <= 100 for view in (purchase, settlement, expense))
     department_select = expense["blocks"][1]["element"]
     assert department_select["initial_option"]["value"] == "department_3"
+
+    for modal in (purchase, settlement, expense):
+        slack_view = View(**modal)
+        assert slack_view.validate_json() is None
 
 
 def test_settlement_assignment_prefills_expense_details() -> None:

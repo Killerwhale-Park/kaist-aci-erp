@@ -1,11 +1,6 @@
 from enum import StrEnum
 
 
-class UserRole(StrEnum):
-    REQUESTER = "REQUESTER"
-    SYSTEM_ADMIN = "SYSTEM_ADMIN"
-
-
 class BudgetFormScope(StrEnum):
     DEPARTMENT = "DEPARTMENT"
     GLOBAL = "GLOBAL"

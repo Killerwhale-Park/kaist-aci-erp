@@ -12,7 +12,6 @@ from app.domain.enums import (
     EvidenceSubmissionStatus,
     EvidenceTiming,
     RequestStatus,
-    UserRole,
     WorkRequestKind,
     WorkRequestStatus,
 )
@@ -239,9 +238,12 @@ class ExpenseRequest:
 
 
 @dataclass(frozen=True)
-class UserProfile:
+class ApplicantProfile:
+    """Stable applicant identity reused across expense submissions."""
+
     slack_user_id: str
-    role: UserRole
+    applicant_type: ApplicantType
+    applicant_identifier: str
 
 
 @dataclass

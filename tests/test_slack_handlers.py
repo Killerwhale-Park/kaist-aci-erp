@@ -3,8 +3,10 @@ from collections.abc import Callable
 from datetime import date
 
 import pytest
+from sqlalchemy import event
 
 from app.domain.catalog import department_by_id
+from app.domain.enums import ApplicantType
 from app.domain.work_requests import settlement_created_data
 from app.i18n import t
 from app.ledger.repository import LedgerRepository
@@ -54,6 +56,12 @@ def registered_handlers(database) -> RegisteredHandlers:
 async def test_direct_expense_form_opens_without_settlement_or_approval_route(
     slack_client, database
 ) -> None:
+    ledger = LedgerRepository(slack_client, database)
+    await ledger.save_applicant_profile(
+        "U_STUDENT",
+        applicant_type=ApplicantType.STUDENT,
+        applicant_identifier="202600001",
+    )
     handlers = registered_handlers(database)
 
     async def ack(**_kwargs) -> None:
@@ -69,7 +77,67 @@ async def test_direct_expense_form_opens_without_settlement_or_approval_route(
         slack_client,
     )
 
-    assert slack_client.call_order[:2] == ["ack", "views_open"]
+    assert slack_client.call_order[:3] == ["ack", "views_open", "views_update"]
+    assert slack_client.opened_views["V1"]["callback_id"] == "expense_context"
+
+
+@pytest.mark.asyncio
+async def test_missing_profile_is_saved_once_then_continues_to_expense(
+    slack_client, database
+) -> None:
+    handlers = registered_handlers(database)
+
+    async def action_ack(**_kwargs) -> None:
+        slack_client.call_order.append("ack")
+
+    await handlers.actions["new_expense_request"](
+        action_ack,
+        {
+            "trigger_id": "TRIGGER",
+            "user": {"id": "U_STUDENT"},
+            "actions": [{"value": "new"}],
+        },
+        slack_client,
+    )
+    assert slack_client.opened_views["V1"]["callback_id"] == "applicant_profile"
+
+    acknowledgements: list[dict] = []
+
+    async def view_ack(**kwargs) -> None:
+        acknowledgements.append(kwargs)
+
+    await handlers.views["applicant_profile"](
+        view_ack,
+        {
+            "user": {"id": "U_STUDENT"},
+            "view": {
+                "id": "V1",
+                "private_metadata": slack_client.opened_views["V1"]["private_metadata"],
+                "state": {
+                    "values": {
+                        "profile_applicant_type": {
+                            "profile_applicant_type_changed": {
+                                "type": "static_select",
+                                "selected_option": {"value": "STUDENT"},
+                            }
+                        },
+                        "profile_identifier": {
+                            "value": {
+                                "type": "plain_text_input",
+                                "value": "202600001",
+                            }
+                        },
+                    }
+                },
+            },
+        },
+        slack_client,
+    )
+
+    profile = await LedgerRepository(slack_client, database).applicant_profile("U_STUDENT")
+    assert profile is not None
+    assert profile.applicant_identifier == "202600001"
+    assert acknowledgements == [{"response_action": "update", "view": loading_modal(t("saving"))}]
     assert slack_client.opened_views["V1"]["callback_id"] == "expense_context"
 
 
@@ -83,16 +151,31 @@ async def test_received_settlement_is_listed_and_can_start_after_loading_view(
     request = await ledger.create_work_request(
         settlement_created_data(command, department_by_id(command.department_id))
     )
+    await ledger.save_applicant_profile(
+        command.assignee_slack_user_id,
+        applicant_type=ApplicantType.STUDENT,
+        applicant_identifier="202600001",
+    )
     handlers = registered_handlers(database)
 
     async def ack(**_kwargs) -> None:
         slack_client.call_order.append("ack")
 
-    await handlers.actions["refresh_home"](
-        ack,
-        {"user": {"id": command.assignee_slack_user_id}},
-        slack_client,
-    )
+    statements: list[str] = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _many) -> None:
+        statements.append(statement)
+
+    event.listen(database.engine.sync_engine, "before_cursor_execute", record_statement)
+    try:
+        await handlers.actions["refresh_home"](
+            ack,
+            {"user": {"id": command.assignee_slack_user_id}},
+            slack_client,
+        )
+    finally:
+        event.remove(database.engine.sync_engine, "before_cursor_execute", record_statement)
+    assert sum("FROM work_request_events" in statement for statement in statements) == 1
     home = slack_client.published_views[command.assignee_slack_user_id]
     home_actions = {
         element["action_id"]
@@ -274,22 +357,19 @@ async def test_assigned_settlement_authorizes_expense_without_direct_requester_r
             "user": {"id": command.assignee_slack_user_id},
             "view": {
                 "id": "V_CONTEXT",
-                "private_metadata": json.dumps({"source_work_request_id": source.id}),
+                "private_metadata": json.dumps(
+                    {
+                        "source_work_request_id": source.id,
+                        "profile": {
+                            "slack_user_id": command.assignee_slack_user_id,
+                            "applicant_type": "STUDENT",
+                            "applicant_identifier": "202600001",
+                        },
+                    }
+                ),
                 "state": {
                     "values": {
                         "department": selected("department_1"),
-                        "applicant_type": {
-                            "applicant_type_changed": {
-                                "type": "static_select",
-                                "selected_option": {"value": "STUDENT"},
-                            }
-                        },
-                        "student_number": {
-                            "value": {
-                                "type": "plain_text_input",
-                                "value": "202600001",
-                            }
-                        },
                         "budget_level_1": {
                             "budget_node_selected": {
                                 "type": "static_select",

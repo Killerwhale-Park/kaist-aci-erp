@@ -85,11 +85,14 @@ async def test_signed_http_response_is_not_returned_before_listener_finishes() -
     }
     raw_body = urlencode({"payload": json.dumps(payload, separators=(",", ":"))})
     timestamp = str(int(time.time()))
-    signature = "v0=" + hmac.new(
-        signing_secret.encode(),
-        f"v0:{timestamp}:{raw_body}".encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    signature = (
+        "v0="
+        + hmac.new(
+            signing_secret.encode(),
+            f"v0:{timestamp}:{raw_body}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+    )
     headers = {
         "content-type": "application/x-www-form-urlencoded",
         "x-slack-request-timestamp": timestamp,

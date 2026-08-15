@@ -199,6 +199,8 @@ def build_user_work_queue(
     action_required = [
         item for adapter in adapters for item in adapter.action_required(slack_user_id)
     ]
+    actionable_keys = {(item.source, item.source_id) for item in action_required}
+    submitted = [item for item in submitted if (item.source, item.source_id) not in actionable_keys]
     submitted.sort(key=lambda item: item.occurred_at, reverse=True)
     action_required.sort(key=lambda item: item.occurred_at, reverse=True)
     return UserWorkQueue(tuple(submitted), tuple(action_required))

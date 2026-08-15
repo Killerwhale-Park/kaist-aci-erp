@@ -6,6 +6,10 @@ class ConfigurationError(DomainError):
     pass
 
 
+class ApprovalConfigurationError(ConfigurationError):
+    pass
+
+
 class EntityNotFoundError(DomainError):
     pass
 

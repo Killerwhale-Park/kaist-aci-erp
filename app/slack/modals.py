@@ -9,6 +9,7 @@ from app.config.roles import (
 )
 from app.domain.enums import ApplicantType, EvidenceRequirementLevel, EvidenceTiming
 from app.domain.models import (
+    ApplicantProfile,
     BudgetNode,
     Department,
     EvidenceRequirementDefinition,
@@ -98,14 +99,13 @@ def _budget_selection_blocks(
 
 
 def expense_context_modal(
-    slack_user_id: str,
+    profile: ApplicantProfile,
     departments: Iterable[Department],
     budget_nodes: Iterable[BudgetNode],
     category_node_ids: Iterable[str] = (),
     initial_department_id: str | None = None,
     source_work_request_id: str | None = None,
     selected_budget_node_ids: tuple[str, ...] = (),
-    applicant_type: ApplicantType = ApplicantType.STUDENT,
 ) -> dict:
     department_options = [_option(item.id, item.name_en, item.name_ko) for item in departments]
     department_element: dict = {
@@ -118,29 +118,28 @@ def expense_context_modal(
     )
     if initial_department is not None:
         department_element["initial_option"] = initial_department
-    applicant_options = [
-        {"text": {"type": "plain_text", "text": t("student")}, "value": "STUDENT"},
-        {"text": {"type": "plain_text", "text": t("professor")}, "value": "PROFESSOR"},
-    ]
-    applicant_element = {
-        "type": "static_select",
-        "action_id": "applicant_type_changed",
-        "options": applicant_options,
-        "initial_option": next(
-            item for item in applicant_options if item["value"] == applicant_type.value
-        ),
-    }
     budget_blocks, _selected_leaf = _budget_selection_blocks(
         budget_nodes, set(category_node_ids), selected_budget_node_ids
     )
-    identifier_block_id = (
-        "student_number" if applicant_type == ApplicantType.STUDENT else "employee_number"
+    applicant_kind = t(
+        "student" if profile.applicant_type == ApplicantType.STUDENT else "professor"
     )
     view = {
         "type": "modal",
         "callback_id": "expense_context",
         "private_metadata": json.dumps(
-            {"source_work_request_id": source_work_request_id} if source_work_request_id else {}
+            {
+                "profile": {
+                    "slack_user_id": profile.slack_user_id,
+                    "applicant_type": profile.applicant_type.value,
+                    "applicant_identifier": profile.applicant_identifier,
+                },
+                **(
+                    {"source_work_request_id": source_work_request_id}
+                    if source_work_request_id
+                    else {}
+                ),
+            }
         ),
         "title": {"type": "plain_text", "text": t("new_request_short")},
         "submit": {"type": "plain_text", "text": t("continue")},
@@ -150,7 +149,11 @@ def expense_context_modal(
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{t('applicant')}*\n<@{slack_user_id}>\n_{t('automatic_identity')}_",
+                    "text": (
+                        f"*{t('applicant')}*\n<@{profile.slack_user_id}>\n"
+                        f"{applicant_kind} · `{profile.applicant_identifier}`\n"
+                        "_내 정보 설정에 저장된 값을 사용합니다._"
+                    ),
                 },
             },
             {
@@ -159,30 +162,75 @@ def expense_context_modal(
                 "label": {"type": "plain_text", "text": t("department")},
                 "element": department_element,
             },
-            {
-                "type": "input",
-                "block_id": "applicant_type",
-                "dispatch_action": True,
-                "label": {"type": "plain_text", "text": t("applicant_type")},
-                "element": applicant_element,
-            },
-            {
-                "type": "input",
-                "block_id": identifier_block_id,
-                "label": {
-                    "type": "plain_text",
-                    "text": (
-                        t("student_id")
-                        if applicant_type == ApplicantType.STUDENT
-                        else t("employee_id")
-                    ),
-                },
-                "element": input_element("value"),
-            },
             *budget_blocks,
         ],
     }
     return view
+
+
+def applicant_profile_modal(
+    slack_user_id: str,
+    profile: ApplicantProfile | None = None,
+    *,
+    applicant_type: ApplicantType | None = None,
+    continuation: dict | None = None,
+) -> dict:
+    selected_type = applicant_type or (
+        profile.applicant_type if profile is not None else ApplicantType.STUDENT
+    )
+    applicant_options = [
+        {"text": {"type": "plain_text", "text": t("student")}, "value": "STUDENT"},
+        {"text": {"type": "plain_text", "text": t("professor")}, "value": "PROFESSOR"},
+    ]
+    identifier_key = "student_id" if selected_type == ApplicantType.STUDENT else "employee_id"
+    identifier_element = input_element("value")
+    if profile is not None and profile.applicant_type == selected_type:
+        identifier_element["initial_value"] = profile.applicant_identifier
+    return {
+        "type": "modal",
+        "callback_id": "applicant_profile",
+        "private_metadata": json.dumps(
+            {
+                "slack_user_id": slack_user_id,
+                **(
+                    {
+                        "saved_profile": {
+                            "applicant_type": profile.applicant_type.value,
+                            "applicant_identifier": profile.applicant_identifier,
+                        }
+                    }
+                    if profile is not None
+                    else {}
+                ),
+                **(continuation or {}),
+            }
+        ),
+        "title": {"type": "plain_text", "text": "내 정보 설정"},
+        "submit": {"type": "plain_text", "text": t("save")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": [
+            {
+                "type": "input",
+                "block_id": "profile_applicant_type",
+                "dispatch_action": True,
+                "label": {"type": "plain_text", "text": t("applicant_type")},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "profile_applicant_type_changed",
+                    "options": applicant_options,
+                    "initial_option": next(
+                        item for item in applicant_options if item["value"] == selected_type.value
+                    ),
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "profile_identifier",
+                "label": {"type": "plain_text", "text": t(identifier_key)},
+                "element": identifier_element,
+            },
+        ],
+    }
 
 
 def _work_request_base_blocks(departments: Iterable[Department]) -> list[dict]:
@@ -205,11 +253,7 @@ def _work_request_base_blocks(departments: Iterable[Department]) -> list[dict]:
                 "type": "conversations_select",
                 "action_id": "value",
                 "placeholder": {"type": "plain_text", "text": t("select_channel")},
-                "filter": {
-                    "include": ["private"],
-                    "exclude_external_shared_channels": True,
-                    "exclude_bot_users": True,
-                },
+                "filter": {"include": ["private"]},
             },
         },
         {

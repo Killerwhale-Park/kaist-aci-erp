@@ -6,11 +6,13 @@ from app.config.roles import (
 )
 from app.domain.enums import ApplicantType, EvidenceRequirementLevel, EvidenceTiming
 from app.domain.models import (
+    ApplicantProfile,
     BudgetNode,
     Department,
     EvidenceRequirementDefinition,
 )
 from app.slack.modals import (
+    applicant_profile_modal,
     approval_rule_editor_modal,
     configuration_notice_modal,
     expense_context_modal,
@@ -23,7 +25,7 @@ from app.slack.modals import (
 
 def test_context_and_dynamic_evidence_modal_use_block_kit_limits() -> None:
     context_view = expense_context_modal(
-        "U_STUDENT",
+        ApplicantProfile("U_STUDENT", ApplicantType.STUDENT, "202500001"),
         [
             Department(
                 id=f"department_{index}",
@@ -95,7 +97,7 @@ def test_context_and_dynamic_evidence_modal_use_block_kit_limits() -> None:
     assert evidence_blocks["evidence__e_ticket"]["optional"] is True
 
 
-def test_budget_depth_and_applicant_identifier_are_dynamic() -> None:
+def test_budget_depth_is_dynamic_and_profile_identity_is_reused() -> None:
     department = Department("department_1", "AI Computing", "AI Computing")
     nodes = [
         BudgetNode("l1", None, "Level 1", "1단계"),
@@ -105,19 +107,18 @@ def test_budget_depth_and_applicant_identifier_are_dynamic() -> None:
         BudgetNode("l5", "l4", "Leaf", "최종 항목"),
     ]
     incomplete = expense_context_modal(
-        "U_USER",
+        ApplicantProfile("U_USER", ApplicantType.STUDENT, "202500001"),
         [department],
         nodes,
         category_node_ids={"l5"},
         selected_budget_node_ids=("l1",),
     )
     professor = expense_context_modal(
-        "U_USER",
+        ApplicantProfile("U_USER", ApplicantType.PROFESSOR, "E12345"),
         [department],
         nodes,
         category_node_ids={"l5"},
         selected_budget_node_ids=("l1", "l2", "l3", "l4", "l5"),
-        applicant_type=ApplicantType.PROFESSOR,
     )
 
     assert "submit" in incomplete
@@ -132,15 +133,18 @@ def test_budget_depth_and_applicant_identifier_are_dynamic() -> None:
         )
         == 5
     )
-    assert any(block.get("block_id") == "employee_number" for block in professor["blocks"])
-    assert not any(block.get("block_id") == "student_number" for block in professor["blocks"])
+    assert not any(
+        block.get("block_id") in {"employee_number", "student_number", "applicant_type"}
+        for block in professor["blocks"]
+    )
+    assert any("E12345" in block.get("text", {}).get("text", "") for block in professor["blocks"])
 
     two_level_nodes = [
         BudgetNode("root", None, "Root", "상위"),
         BudgetNode("leaf", "root", "Leaf", "최종"),
     ]
     two_level = expense_context_modal(
-        "U_USER",
+        ApplicantProfile("U_USER", ApplicantType.STUDENT, "202500001"),
         [department],
         two_level_nodes,
         category_node_ids={"leaf"},
@@ -156,6 +160,28 @@ def test_budget_depth_and_applicant_identifier_are_dynamic() -> None:
         )
         == 2
     )
+
+
+def test_applicant_profile_form_switches_between_student_and_employee_id() -> None:
+    student = applicant_profile_modal(
+        "U_USER",
+        ApplicantProfile("U_USER", ApplicantType.STUDENT, "202600001"),
+    )
+    professor = applicant_profile_modal(
+        "U_USER",
+        ApplicantProfile("U_USER", ApplicantType.PROFESSOR, "E12345"),
+    )
+
+    student_identifier = next(
+        block for block in student["blocks"] if block["block_id"] == "profile_identifier"
+    )
+    professor_identifier = next(
+        block for block in professor["blocks"] if block["block_id"] == "profile_identifier"
+    )
+    assert "학번" in student_identifier["label"]["text"]
+    assert student_identifier["element"]["initial_value"] == "202600001"
+    assert "사번" in professor_identifier["label"]["text"]
+    assert professor_identifier["element"]["initial_value"] == "E12345"
 
 
 def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
@@ -208,7 +234,7 @@ def test_every_modal_with_input_blocks_has_a_submit_button() -> None:
     department = Department("department_1", "AI Computing", "AI Computing")
     views = [
         expense_context_modal(
-            "U_USER",
+            ApplicantProfile("U_USER", ApplicantType.STUDENT, "202500001"),
             [department],
             [BudgetNode("root", None, "Root", "상위")],
         ),

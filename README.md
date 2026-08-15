@@ -27,6 +27,9 @@ PostgreSQL
 
 Slack 메시지는 알림과 상태 화면입니다. 요청, Role, 승인 상태와 변경 이력은 PostgreSQL이 원본이며 메시지가 삭제되어도 보존됩니다.
 
+신청자 구분과 학번·사번은 App Home의 `내 정보`에서 한 번 설정합니다. 이 Profile은
+요청의 회계 학과·재원 선택과 독립적이며 정산 양식마다 다시 입력하지 않습니다.
+
 ## 배포 준비
 
 Vercel 프로젝트의 Marketplace → Storage에서 Neon을 설치하고 무료 PostgreSQL을 연결합니다. 연결 후 다음 세 환경변수가 Production에 있어야 합니다.
@@ -88,6 +91,8 @@ https://kaist-aci-erp.vercel.app/slack/events
 1. System Channels: Audit, Alerts, 추가 운영 채널
 2. Access Roles: 신청 가능자, 학생 담당자, 교수, 행정팀, 시스템 관리자
 3. Approval Routing: 학과·재원 항목별 승인 채널
+
+각 사용자는 첫 정산 신청 전에 `내 정보`에서 학생/교수와 학번/사번을 저장합니다.
 
 직접 정산, 구매 요청, 정산 업무 배정은 App Home에서 서로 독립적으로 시작합니다. 직접
 정산 양식은 항상 열 수 있지만, 최종 제출에는 선택한 재원 항목의 Approval Routing이
