@@ -6,6 +6,7 @@ from app.config.settings import get_settings
 from app.database import Database
 from app.ledger.schema import REQUIRED_DATABASE_REVISION
 from app.slack.app import create_slack_app
+from app.slack.http import handle_slack_request
 
 settings = get_settings()
 database = Database(settings.database_url)
@@ -37,4 +38,4 @@ async def ready() -> dict[str, str]:
 
 @app.post("/slack/events")
 async def slack_events(request: Request):
-    return await slack_handler.handle(request)
+    return await handle_slack_request(slack_handler, request)

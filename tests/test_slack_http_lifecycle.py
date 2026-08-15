@@ -5,16 +5,17 @@ import json
 import time
 from urllib.parse import urlencode
 
-import httpx
 import pytest
-from fastapi import FastAPI, Request
 from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.authorization import AuthorizeResult
+from starlette.requests import Request
 
 from app.config.settings import Settings
 from app.database import Database
 from app.slack.app import create_slack_app
+from app.slack.deferred import defer
+from app.slack.http import handle_slack_request
 
 
 def test_production_slack_app_waits_for_listeners() -> None:
@@ -32,11 +33,11 @@ def test_production_slack_app_waits_for_listeners() -> None:
 
 
 @pytest.mark.asyncio
-async def test_signed_http_response_is_not_returned_before_listener_finishes() -> None:
+async def test_signed_http_response_sends_before_deferred_listener_work_finishes() -> None:
     signing_secret = "test-secret"
-    listener_started = asyncio.Event()
-    allow_listener_to_finish = asyncio.Event()
-    listener_finished = asyncio.Event()
+    background_started = asyncio.Event()
+    allow_background_to_finish = asyncio.Event()
+    background_finished = asyncio.Event()
 
     async def authorize(**_kwargs) -> AuthorizeResult:
         return AuthorizeResult(
@@ -55,16 +56,15 @@ async def test_signed_http_response_is_not_returned_before_listener_finishes() -
     @slack_app.action("lifecycle_probe")
     async def lifecycle_probe(ack) -> None:
         await ack()
-        listener_started.set()
-        await allow_listener_to_finish.wait()
-        listener_finished.set()
+
+        async def background() -> None:
+            background_started.set()
+            await allow_background_to_finish.wait()
+            background_finished.set()
+
+        await defer(background)
 
     handler = AsyncSlackRequestHandler(slack_app)
-    http_app = FastAPI()
-
-    @http_app.post("/slack/events")
-    async def slack_events(request: Request):
-        return await handler.handle(request)
 
     payload = {
         "type": "block_actions",
@@ -98,19 +98,50 @@ async def test_signed_http_response_is_not_returned_before_listener_finishes() -
         "x-slack-request-timestamp": timestamp,
         "x-slack-signature": signature,
     }
+    request_messages = [{"type": "http.request", "body": raw_body.encode(), "more_body": False}]
 
-    transport = httpx.ASGITransport(app=http_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        request_task = asyncio.create_task(
-            client.post("/slack/events", content=raw_body, headers=headers)
-        )
-        await asyncio.wait_for(listener_started.wait(), timeout=1)
-        await asyncio.sleep(0)
+    async def receive() -> dict:
+        if request_messages:
+            return request_messages.pop(0)
+        return {"type": "http.disconnect"}
 
-        assert request_task.done() is False
-
-        allow_listener_to_finish.set()
-        response = await asyncio.wait_for(request_task, timeout=1)
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/slack/events",
+        "raw_path": b"/slack/events",
+        "query_string": b"",
+        "headers": [(key.encode(), value.encode()) for key, value in headers.items()],
+        "client": ("127.0.0.1", 12345),
+        "server": ("test", 443),
+    }
+    response = await handle_slack_request(
+        handler,
+        Request(scope, receive),
+    )
 
     assert response.status_code == 200
-    assert listener_finished.is_set()
+    assert response.background is not None
+    assert not background_started.is_set()
+
+    sent: list[dict] = []
+    response_body_sent = asyncio.Event()
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body", False):
+            response_body_sent.set()
+
+    response_task = asyncio.create_task(response(scope, receive, send))
+    await asyncio.wait_for(response_body_sent.wait(), timeout=1)
+    await asyncio.wait_for(background_started.wait(), timeout=1)
+
+    assert response_task.done() is False
+    assert not background_finished.is_set()
+
+    allow_background_to_finish.set()
+    await asyncio.wait_for(response_task, timeout=1)
+    assert background_finished.is_set()

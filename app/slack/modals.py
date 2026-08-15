@@ -710,7 +710,9 @@ def approval_rule_editor_modal(
     workflow_name_en: str,
     workflow_name_ko: str,
     steps: list[dict],
+    assigned_user_ids_by_role: dict[str, tuple[str, ...] | list[str]] | None = None,
 ) -> dict:
+    assigned_user_ids_by_role = assigned_user_ids_by_role or {}
     channel_element: dict = {
         "type": "conversations_select",
         "action_id": "value",
@@ -749,7 +751,11 @@ def approval_rule_editor_modal(
         },
     ]
     role_names = {role.id: role.name_ko for role in role_definitions()}
+    role_order: list[str] = []
     for index, step in enumerate(steps):
+        for role_id in step.get("approver_roles") or []:
+            if role_id not in role_order:
+                role_order.append(role_id)
         roles = (
             ", ".join(
                 role_names.get(role_id, role_id) for role_id in (step.get("approver_roles") or [])
@@ -771,6 +777,39 @@ def approval_rule_editor_modal(
                 },
             ]
         )
+    if role_order:
+        blocks.extend(
+            [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": t("approval_assignee_notice")},
+                },
+            ]
+        )
+    for role_id in role_order:
+        selected = sorted(set(assigned_user_ids_by_role.get(role_id, ())))
+        element: dict = {
+            "type": "multi_users_select",
+            "action_id": "value",
+            "placeholder": {
+                "type": "plain_text",
+                "text": t("select_role_assignees", role=role_names.get(role_id, role_id)),
+            },
+        }
+        if selected:
+            element["initial_users"] = selected
+        blocks.append(
+            {
+                "type": "input",
+                "block_id": f"approval_role__{role_id}",
+                "label": {
+                    "type": "plain_text",
+                    "text": t("role_assignees", role=role_names.get(role_id, role_id)),
+                },
+                "element": element,
+            }
+        )
     return {
         "type": "modal",
         "callback_id": "approval_rule_editor",
@@ -780,7 +819,7 @@ def approval_rule_editor_modal(
         "title": {"type": "plain_text", "text": t("approval_rule_title")},
         "submit": {"type": "plain_text", "text": t("save")},
         "close": {"type": "plain_text", "text": t("cancel")},
-        "blocks": blocks[:100],
+        "blocks": blocks,
     }
 
 

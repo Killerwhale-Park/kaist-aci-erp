@@ -21,6 +21,7 @@ from app.slack.modals import (
     role_configuration_modal,
     system_channels_modal,
 )
+from app.slack.surfaces import validated_view
 
 
 def test_context_and_dynamic_evidence_modal_use_block_kit_limits() -> None:
@@ -199,6 +200,7 @@ def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
                 "approver_roles": [PROFESSOR_ROLE],
             }
         ],
+        {PROFESSOR_ROLE: ("U_PROFESSOR_A", "U_PROFESSOR_B")},
     )
     roles = role_configuration_modal(
         {
@@ -219,6 +221,17 @@ def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
 
     editor_elements = [block.get("element") for block in editor["blocks"] if block.get("element")]
     assert any(element["type"] == "conversations_select" for element in editor_elements)
+    approver_input = next(
+        block
+        for block in editor["blocks"]
+        if block.get("block_id") == f"approval_role__{PROFESSOR_ROLE}"
+    )
+    assert approver_input["element"]["type"] == "multi_users_select"
+    assert approver_input["element"]["initial_users"] == [
+        "U_PROFESSOR_A",
+        "U_PROFESSOR_B",
+    ]
+    validated_view(editor)
     role_inputs = [block for block in roles["blocks"] if block["type"] == "input"]
     assert len(role_inputs) == 5
     assert all(block["element"]["type"] == "multi_users_select" for block in role_inputs)

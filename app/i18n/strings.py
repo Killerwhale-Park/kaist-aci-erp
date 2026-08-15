@@ -171,8 +171,19 @@ STRINGS = {
         "앱이 참여한 비공개 채널을 선택하세요. 저장하면 이 학과·재원 요청은 선택한 "
         "채널에서 승인 절차를 진행합니다."
     ),
+    "approval_assignee_notice": (
+        "*단계별 담당자*\n각 역할의 담당자를 선택하세요. 이 담당자 설정은 다른 승인 절차에서도 "
+        "같은 역할에 공통으로 적용되며, 실제 승인 권한은 선택한 채널에 참여한 담당자에게만 "
+        "부여됩니다."
+    ),
+    "role_assignees": "{role}",
+    "select_role_assignees": "{role} 선택",
+    "approval_assignees_invalid": (
+        "각 단계의 담당자를 한 명 이상 선택하고, 선택한 담당자가 모두 승인 채널에 참여했는지 "
+        "확인해주세요."
+    ),
     "save": "Save / 저장",
-    "rule_saved": "승인 절차를 저장했습니다. 창을 닫고 App Home을 새로고침해주세요.",
+    "rule_saved": "승인 절차를 저장했습니다. 변경 사항이 바로 적용됩니다.",
     "rule_saved_incomplete": (
         "The approval procedure was saved, but one or more required roles have no assigned "
         "member.\n"

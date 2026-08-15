@@ -8,6 +8,7 @@ import pytest_asyncio
 from app.config.settings import Settings
 from app.database import Database
 from app.ledger.tables import Base
+from app.slack.surfaces import validated_view
 
 
 class FakeSlackClient:
@@ -53,6 +54,7 @@ class FakeSlackClient:
         return {"ok": True, "ts": message["ts"], "message": message}
 
     async def views_open(self, **kwargs):
+        validated_view(kwargs["view"])
         self.calls["views_open"] += 1
         self.call_order.append("views_open")
         view_id = f"V{self.calls['views_open']}"
@@ -60,6 +62,7 @@ class FakeSlackClient:
         return {"ok": True, "view": {"id": view_id, **kwargs["view"]}}
 
     async def views_push(self, **kwargs):
+        validated_view(kwargs["view"])
         self.calls["views_push"] += 1
         self.call_order.append("views_push")
         view_id = f"VP{self.calls['views_push']}"
@@ -67,12 +70,14 @@ class FakeSlackClient:
         return {"ok": True, "view": {"id": view_id, **kwargs["view"]}}
 
     async def views_update(self, **kwargs):
+        validated_view(kwargs["view"])
         self.calls["views_update"] += 1
         self.call_order.append("views_update")
         self.opened_views[kwargs["view_id"]] = kwargs["view"]
         return {"ok": True, "view": {"id": kwargs["view_id"], **kwargs["view"]}}
 
     async def views_publish(self, **kwargs):
+        validated_view(kwargs["view"])
         self.calls["views_publish"] += 1
         self.call_order.append("views_publish")
         self.published_views[kwargs["user_id"]] = kwargs["view"]

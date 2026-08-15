@@ -1,5 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "fluid": true,
+  "regions": ["cle1"],
   "functions": {
     "app/main.py": {
       "maxDuration": 60,

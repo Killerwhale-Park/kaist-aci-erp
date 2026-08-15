@@ -1012,6 +1012,33 @@ class LedgerRepository:
             version=version,
         )
 
+    async def approval_procedure_configuration(
+        self,
+        department_id: str,
+        category_id: str,
+        role_ids: set[str],
+    ) -> tuple[str | None, dict[str, set[str]]]:
+        assignments = {
+            role_id: set(default_role_assignments()[WORKSPACE_ROLE_SCOPE].get(role_id, set()))
+            for role_id in role_ids
+        }
+        async with self.database.session() as session:
+            route = await session.get(ApprovalRouteRecord, (department_id, category_id))
+            if role_ids:
+                rows = list(
+                    await session.scalars(
+                        select(RoleAssignmentRecord).where(
+                            RoleAssignmentRecord.scope == WORKSPACE_ROLE_SCOPE,
+                            RoleAssignmentRecord.role_id.in_(role_ids),
+                        )
+                    )
+                )
+            else:
+                rows = []
+        for row in rows:
+            assignments[row.role_id].add(row.slack_user_id)
+        return route.approval_channel_id if route else None, assignments
+
     async def resolve_approval_workflow(
         self,
         workflow_id: str,
@@ -1093,29 +1120,13 @@ class LedgerRepository:
         audit_channel_id: str | None = None
         version = 0
         async with self.database.session() as session, session.begin():
-            route = await session.scalar(
-                select(ApprovalRouteRecord)
-                .where(
-                    ApprovalRouteRecord.department_id == department_id,
-                    ApprovalRouteRecord.category_id == category_id,
-                )
-                .with_for_update()
+            route = await self._upsert_approval_route(
+                session,
+                actor,
+                department_id,
+                category,
+                approval_channel_id,
             )
-            if route is None:
-                route = ApprovalRouteRecord(
-                    department_id=department_id,
-                    category_id=category_id,
-                    budget_program_id=category.budget_program_id,
-                    approval_channel_id=approval_channel_id,
-                    version=1,
-                    updated_by_slack_user_id=actor,
-                )
-                session.add(route)
-            else:
-                route.approval_channel_id = approval_channel_id
-                route.version += 1
-                route.updated_by_slack_user_id = actor
-                route.updated_at = _utc_now()
             version = route.version
             settings = await session.get(SystemSettingsRecord, 1)
             audit_channel_id = settings.audit_channel_id if settings else None
@@ -1129,6 +1140,101 @@ class LedgerRepository:
                 detail={"approval_channel_id": approval_channel_id},
             )
         return version, audit_channel_id
+
+    async def configure_approval_procedure(
+        self,
+        actor: str,
+        department_id: str,
+        category_id: str,
+        approval_channel_id: str,
+        assigned_user_ids_by_role: dict[str, set[str]],
+    ) -> None:
+        await self.assert_system_admin(actor)
+        category = category_by_id(category_id, department_id)
+        workflow = workflow_for_budget_node(category_id, department_id)
+        if category is None or workflow is None:
+            raise EntityNotFoundError("Approval workflow mapping not found")
+        workflow_roles = {role_id for step in workflow.steps for role_id in step.approver_roles}
+        if set(assigned_user_ids_by_role) != workflow_roles:
+            raise ConfigurationError("Workflow role assignments do not match the workflow")
+        key = f"{department_id}:{category_id}"
+        audit_channel_id: str | None = None
+        async with self.database.session() as session, session.begin():
+            await self._upsert_approval_route(
+                session,
+                actor,
+                department_id,
+                category,
+                approval_channel_id,
+            )
+            if workflow_roles:
+                await session.execute(
+                    delete(RoleAssignmentRecord).where(
+                        RoleAssignmentRecord.scope == WORKSPACE_ROLE_SCOPE,
+                        RoleAssignmentRecord.role_id.in_(workflow_roles),
+                    )
+                )
+            session.add_all(
+                RoleAssignmentRecord(
+                    scope=WORKSPACE_ROLE_SCOPE,
+                    role_id=role_id,
+                    slack_user_id=user_id,
+                    assigned_by_slack_user_id=actor,
+                )
+                for role_id, user_ids in assigned_user_ids_by_role.items()
+                for user_id in sorted(user_ids)
+            )
+            settings = await session.get(SystemSettingsRecord, 1)
+            audit_channel_id = settings.audit_channel_id if settings else None
+            await self._audit(
+                session,
+                event_type="APPROVAL_PROCEDURE_UPDATED",
+                actor=actor,
+                entity_type="approval_procedure",
+                entity_id=key,
+                summary=f"Approval procedure updated: {key}",
+                detail={
+                    "approval_channel_id": approval_channel_id,
+                    "assigned_user_ids_by_role": {
+                        role_id: sorted(user_ids)
+                        for role_id, user_ids in assigned_user_ids_by_role.items()
+                    },
+                },
+            )
+        await self._publish_audit(audit_channel_id, actor, f"Approval procedure updated: {key}")
+
+    @staticmethod
+    async def _upsert_approval_route(
+        session,
+        actor: str,
+        department_id: str,
+        category,
+        approval_channel_id: str,
+    ) -> ApprovalRouteRecord:
+        route = await session.scalar(
+            select(ApprovalRouteRecord)
+            .where(
+                ApprovalRouteRecord.department_id == department_id,
+                ApprovalRouteRecord.category_id == category.id,
+            )
+            .with_for_update()
+        )
+        if route is None:
+            route = ApprovalRouteRecord(
+                department_id=department_id,
+                category_id=category.id,
+                budget_program_id=category.budget_program_id,
+                approval_channel_id=approval_channel_id,
+                version=1,
+                updated_by_slack_user_id=actor,
+            )
+            session.add(route)
+        else:
+            route.approval_channel_id = approval_channel_id
+            route.version += 1
+            route.updated_by_slack_user_id = actor
+            route.updated_at = _utc_now()
+        return route
 
     async def role_assignments(self) -> dict[str, dict[str, set[str]]]:
         assignments = default_role_assignments()

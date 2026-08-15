@@ -67,7 +67,7 @@ def app_home_view(dashboard: UserDashboard) -> dict:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "*시스템 설정*\n역할, 운영 채널과 승인 경로를 관리합니다.",
+                        "text": "*시스템 설정*\n역할, 운영 채널과 승인 절차를 관리합니다.",
                     },
                     "accessory": {
                         "type": "button",

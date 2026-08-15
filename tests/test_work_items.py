@@ -169,4 +169,4 @@ def test_home_only_offers_request_types_with_runtime_configuration() -> None:
     assert "refresh_home" in action_ids
     assert "configure_applicant_profile" in action_ids
     assert "manage_rules" in action_ids
-    assert "승인 경로" in page_text
+    assert "승인 절차" in page_text
