@@ -532,38 +532,36 @@ def administration_modal() -> dict:
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": t("admin_menu_notice")},
-        }
-    ]
-    blocks.append(
+        },
         {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "action_id": "configure_system_channels",
-                    "style": "primary",
-                    "text": {"type": "plain_text", "text": t("manage_system_channels")},
-                    "value": "channels",
-                },
-                {
-                    "type": "button",
-                    "action_id": "configure_approval_rules",
-                    "text": {"type": "plain_text", "text": t("configure_rules")},
-                    "value": "rules",
-                },
-                {
-                    "type": "button",
-                    "action_id": "configure_access_roles",
-                    "text": {"type": "plain_text", "text": t("manage_roles")},
-                    "value": "roles",
-                },
-            ],
-        }
-    )
+            "type": "input",
+            "block_id": "administration_section",
+            "label": {"type": "plain_text", "text": t("setting_to_manage")},
+            "element": {
+                "type": "static_select",
+                "action_id": "value",
+                "placeholder": {"type": "plain_text", "text": t("setting_to_manage")},
+                "options": [
+                    _option(
+                        "approval_procedure",
+                        t("configure_rules"),
+                        t("configure_rules"),
+                    ),
+                    _option("access_roles", t("manage_roles"), t("manage_roles")),
+                    _option(
+                        "system_channels",
+                        t("manage_system_channels"),
+                        t("manage_system_channels"),
+                    ),
+                ],
+            },
+        },
+    ]
     return {
         "type": "modal",
         "callback_id": "administration_menu",
         "title": {"type": "plain_text", "text": t("administration_title")},
+        "submit": {"type": "plain_text", "text": t("open_setting")},
         "close": {"type": "plain_text", "text": t("close")},
         "blocks": blocks,
     }
@@ -742,13 +740,22 @@ def approval_rule_editor_modal(
         },
         {
             "type": "context",
-            "elements": [{"type": "mrkdwn", "text": t("private_channel_only")}],
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": t("approval_channel_notice"),
+                }
+            ],
         },
     ]
+    role_names = {role.id: role.name_ko for role in role_definitions()}
     for index, step in enumerate(steps):
-        approver_ids = list(step.get("approver_slack_user_ids") or [])
-        roles = ", ".join(step.get("approver_roles") or []) or "-"
-        users = ", ".join(f"<@{user_id}>" for user_id in approver_ids) or t("unassigned")
+        roles = (
+            ", ".join(
+                role_names.get(role_id, role_id) for role_id in (step.get("approver_roles") or [])
+            )
+            or "-"
+        )
         step_name = display_name(str(step.get("name_en") or ""), str(step.get("name_ko") or ""))
         blocks.extend(
             [
@@ -758,9 +765,7 @@ def approval_rule_editor_modal(
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f"*Step {index + 1}: {step_name}*\n"
-                            f"{t('required_roles')}: `{roles}`\n"
-                            f"{t('assigned_members')}: {users}"
+                            f"*{index + 1}단계 · {step_name}*\n{t('required_roles')}: {roles}"
                         ),
                     },
                 },

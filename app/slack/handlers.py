@@ -21,6 +21,7 @@ from app.domain.catalog import (
     category_for_budget_node,
     department_by_id,
     departments,
+    workflow_for_budget_node,
 )
 from app.domain.enums import (
     ApplicantType,
@@ -1482,6 +1483,45 @@ def register_handlers(slack_app, database: Database) -> None:
         if opened is None:
             return
 
+    @slack_app.view("administration_menu")
+    async def submit_administration_menu(ack, body, client):
+        actor = body["user"]["id"]
+        section = state_value(body["view"]["state"], "administration_section")
+        if section == "approval_procedure":
+            await ack(
+                response_action="update",
+                view=approval_rule_selector_modal(departments(), categories()),
+            )
+            return
+
+        try:
+            ledger = repository(client)
+            await ledger.assert_system_admin(actor)
+            if section == "system_channels":
+                view = system_channels_modal(await ledger.system_channels())
+            elif section == "access_roles":
+                view = role_configuration_modal(await ledger.role_assignments())
+            else:
+                await ack(
+                    response_action="errors",
+                    errors={"administration_section": t("validation_error")},
+                )
+                return
+        except ApprovalPermissionError:
+            await ack(
+                response_action="update",
+                view=configuration_notice_modal(t("unauthorized")),
+            )
+            return
+        except (ConfigurationError, SlackApiError):
+            logger.exception("Failed to load administration section %s", section)
+            await ack(
+                response_action="update",
+                view=configuration_notice_modal(t("configuration_load_error")),
+            )
+            return
+        await ack(response_action="update", view=view)
+
     @slack_app.action("configure_system_channels")
     async def configure_system_channels_action(ack, body, client):
         actor = body["user"]["id"]
@@ -1560,54 +1600,37 @@ def register_handlers(slack_app, database: Database) -> None:
 
     @slack_app.view("approval_rule_selector")
     async def submit_approval_rule_selector(ack, body, client):
-        actor = body["user"]["id"]
         state = body["view"]["state"]
         department_id = state_value(state, "rule_department")
         category_id = state_value(state, "rule_category")
         if not department_id or not category_id:
             await ack(response_action="errors", errors={"rule_category": t("validation_error")})
             return
-        view_id = body["view"]["id"]
-        await ack(response_action="update", view=loading_modal())
-        try:
-            ledger = repository(client)
-            await ledger.assert_system_admin(actor)
-            rule = await ledger.get_rule(department_id, category_id)
-        except ApprovalPermissionError:
-            await show_modal_result(client, view_id, actor, t("unauthorized"))
+        category = category_by_id(category_id, department_id)
+        workflow = workflow_for_budget_node(category_id, department_id)
+        if category is None or workflow is None:
+            await ack(
+                response_action="errors",
+                errors={"rule_category": t("approval_configuration_required")},
+            )
             return
-        except EntityNotFoundError:
-            await show_modal_result(client, view_id, actor, t("approval_configuration_required"))
-            return
-        except (ConfigurationError, SlackApiError):
-            logger.exception("Failed to load approval rule %s:%s", department_id, category_id)
-            await show_modal_result(client, view_id, actor, t("configuration_load_error"))
-            return
-
-        await safe_update_modal(
-            client,
-            view_id,
-            approval_rule_editor_modal(
+        await ack(
+            response_action="update",
+            view=approval_rule_editor_modal(
                 department_id,
                 category_id,
-                rule.approval_channel_id if rule else None,
-                rule.workflow_name_en if rule and rule.workflow_name_en else "Approval Workflow",
-                rule.workflow_name_ko if rule and rule.workflow_name_ko else "승인 절차",
-                (
-                    [
-                        {
-                            "name_en": step.name_en,
-                            "name_ko": step.name_ko,
-                            "approver_slack_user_ids": list(step.approver_slack_user_ids),
-                            "approver_roles": list(step.approver_roles),
-                        }
-                        for step in rule.steps
-                    ]
-                    if rule
-                    else []
-                ),
+                None,
+                workflow.name_en,
+                workflow.name_ko,
+                [
+                    {
+                        "name_en": step.name_en,
+                        "name_ko": step.name_ko,
+                        "approver_roles": list(step.approver_roles),
+                    }
+                    for step in workflow.steps
+                ],
             ),
-            actor,
         )
 
     @slack_app.view("approval_rule_editor")
@@ -1622,26 +1645,36 @@ def register_handlers(slack_app, database: Database) -> None:
                 errors={"approval_channel": t("channel_membership_error")},
             )
             return
-        view_id = body["view"]["id"]
-        await ack(response_action="update", view=loading_modal(t("saving")))
         try:
-            saved = await repository(client).save_approval_route(
+            ledger = repository(client)
+            if not await ledger.channel_is_available(channel_id):
+                await ack(
+                    response_action="errors",
+                    errors={"approval_channel": t("channel_membership_error")},
+                )
+                return
+            await ledger.store_approval_route(
                 actor,
                 metadata["department_id"],
                 metadata["category_id"],
                 channel_id,
             )
-        except (ApprovalPermissionError, ConfigurationError, EntityNotFoundError):
-            await show_modal_result(client, view_id, actor, t("configuration_error"))
+        except ApprovalPermissionError:
+            await ack(
+                response_action="update",
+                view=configuration_notice_modal(t("unauthorized")),
+            )
             return
-        result_message = t("rule_saved_incomplete") if not saved.is_complete else t("rule_saved")
-        await safe_dm(
-            client,
-            actor,
-            result_message,
+        except (ConfigurationError, EntityNotFoundError):
+            await ack(
+                response_action="update",
+                view=configuration_notice_modal(t("configuration_error")),
+            )
+            return
+        await ack(
+            response_action="update",
+            view=configuration_notice_modal(t("rule_saved")),
         )
-        await show_modal_result(client, view_id, actor, result_message)
-        await publish_homes(client, actor)
 
     @slack_app.action("configure_access_roles")
     async def configure_access_roles_action(ack, body, client):

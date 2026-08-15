@@ -315,6 +315,137 @@ async def test_access_role_configuration_pushes_loading_before_database_read(
 
 
 @pytest.mark.asyncio
+async def test_approval_procedure_navigation_uses_submission_response_only(
+    slack_client, database
+) -> None:
+    handlers = registered_handlers(database)
+    acknowledgements: list[dict] = []
+
+    async def ack(**kwargs) -> None:
+        acknowledgements.append(kwargs)
+
+    await handlers.views["administration_menu"](
+        ack,
+        {
+            "user": {"id": ROOT_ADMIN},
+            "view": {
+                "state": {
+                    "values": {
+                        "administration_section": {
+                            "value": {
+                                "type": "static_select",
+                                "selected_option": {"value": "approval_procedure"},
+                            }
+                        }
+                    }
+                }
+            },
+        },
+        slack_client,
+    )
+
+    assert len(acknowledgements) == 1
+    assert acknowledgements[0]["response_action"] == "update"
+    assert acknowledgements[0]["view"]["callback_id"] == "approval_rule_selector"
+    assert slack_client.calls["views_push"] == 0
+    assert slack_client.calls["views_update"] == 0
+
+
+@pytest.mark.asyncio
+async def test_approval_procedure_selection_does_not_query_database(slack_client, database) -> None:
+    handlers = registered_handlers(database)
+    statements: list[str] = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _executemany) -> None:
+        statements.append(statement)
+
+    event.listen(database.engine.sync_engine, "before_cursor_execute", record_sql)
+    acknowledgements: list[dict] = []
+
+    async def ack(**kwargs) -> None:
+        acknowledgements.append(kwargs)
+
+    def selected(value: str) -> dict:
+        return {
+            "value": {
+                "type": "static_select",
+                "selected_option": {"value": value},
+            }
+        }
+
+    await handlers.views["approval_rule_selector"](
+        ack,
+        {
+            "user": {"id": ROOT_ADMIN},
+            "view": {
+                "state": {
+                    "values": {
+                        "rule_department": selected("department_1"),
+                        "rule_category": selected("supplies"),
+                    }
+                }
+            },
+        },
+        slack_client,
+    )
+
+    assert statements == []
+    assert len(acknowledgements) == 1
+    response = acknowledgements[0]
+    assert response["response_action"] == "update"
+    assert response["view"]["callback_id"] == "approval_rule_editor"
+    rendered = str(response["view"])
+    assert "학생 담당자" in rendered
+    assert "STUDENT_COORDINATOR" not in rendered
+    assert slack_client.calls["views_update"] == 0
+
+
+@pytest.mark.asyncio
+async def test_approval_procedure_save_returns_result_without_projection_calls(
+    slack_client, database
+) -> None:
+    handlers = registered_handlers(database)
+    acknowledgements: list[dict] = []
+
+    async def ack(**kwargs) -> None:
+        acknowledgements.append(kwargs)
+
+    await handlers.views["approval_rule_editor"](
+        ack,
+        {
+            "user": {"id": ROOT_ADMIN},
+            "view": {
+                "private_metadata": json.dumps(
+                    {"department_id": "department_1", "category_id": "supplies"}
+                ),
+                "state": {
+                    "values": {
+                        "approval_channel": {
+                            "value": {
+                                "type": "conversations_select",
+                                "selected_conversation": "C_APPROVAL",
+                            }
+                        }
+                    }
+                },
+            },
+        },
+        slack_client,
+    )
+
+    assert len(acknowledgements) == 1
+    response = acknowledgements[0]
+    assert response["response_action"] == "update"
+    assert response["view"]["callback_id"] == "configuration_notice"
+    assert t("rule_saved") in str(response["view"])
+    assert slack_client.calls["views_update"] == 0
+    assert slack_client.calls["views_publish"] == 0
+    assert slack_client.calls["chat_postMessage"] == 0
+    saved = await LedgerRepository(slack_client, database).get_rule("department_1", "supplies")
+    assert saved.approval_channel_id == "C_APPROVAL"
+
+
+@pytest.mark.asyncio
 async def test_assigned_settlement_authorizes_expense_without_direct_requester_role(
     slack_client, database
 ) -> None:

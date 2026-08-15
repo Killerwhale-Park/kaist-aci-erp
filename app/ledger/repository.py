@@ -1059,12 +1059,39 @@ class LedgerRepository:
         await self.assert_system_admin(actor)
         if not approval_channel_id or not await self.channel_is_available(approval_channel_id):
             raise ConfigurationError("The app is not a member of the approval channel")
+        _, audit_channel_id = await self._store_approval_route(
+            actor,
+            department_id,
+            category_id,
+            approval_channel_id,
+        )
+        key = f"{department_id}:{category_id}"
+        await self._publish_audit(audit_channel_id, actor, f"Approval procedure updated: {key}")
+        return await self.get_rule(department_id, category_id)
+
+    async def store_approval_route(
+        self, actor: str, department_id: str, category_id: str, approval_channel_id: str
+    ) -> tuple[int, str | None]:
+        """Persist one approval-channel mapping without building Slack projections."""
+
+        await self.assert_system_admin(actor)
+        return await self._store_approval_route(
+            actor,
+            department_id,
+            category_id,
+            approval_channel_id,
+        )
+
+    async def _store_approval_route(
+        self, actor: str, department_id: str, category_id: str, approval_channel_id: str
+    ) -> tuple[int, str | None]:
         category = category_by_id(category_id, department_id)
         workflow = workflow_for_budget_node(category_id, department_id)
         if category is None or workflow is None:
             raise EntityNotFoundError("Approval workflow mapping not found")
         key = f"{department_id}:{category_id}"
         audit_channel_id: str | None = None
+        version = 0
         async with self.database.session() as session, session.begin():
             route = await session.scalar(
                 select(ApprovalRouteRecord)
@@ -1089,6 +1116,7 @@ class LedgerRepository:
                 route.version += 1
                 route.updated_by_slack_user_id = actor
                 route.updated_at = _utc_now()
+            version = route.version
             settings = await session.get(SystemSettingsRecord, 1)
             audit_channel_id = settings.audit_channel_id if settings else None
             await self._audit(
@@ -1097,11 +1125,10 @@ class LedgerRepository:
                 actor=actor,
                 entity_type="approval_route",
                 entity_id=key,
-                summary=f"Approval route updated: {key}",
+                summary=f"Approval procedure updated: {key}",
                 detail={"approval_channel_id": approval_channel_id},
             )
-        await self._publish_audit(audit_channel_id, actor, f"Approval route updated: {key}")
-        return await self.get_rule(department_id, category_id)
+        return version, audit_channel_id
 
     async def role_assignments(self) -> dict[str, dict[str, set[str]]]:
         assignments = default_role_assignments()

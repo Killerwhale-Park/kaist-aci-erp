@@ -87,14 +87,15 @@ STRINGS = {
     ),
     "request_configuration_missing": (
         "Requests are not open yet. An administrator must register an operating channel and "
-        "configure approval routing.\n"
-        "아직 요청 설정이 완료되지 않았습니다. 관리자가 운영 채널을 등록하고 승인 라우팅을 "
+        "configure the approval procedure.\n"
+        "아직 요청 설정이 완료되지 않았습니다. 관리자가 운영 채널을 등록하고 승인 절차를 "
         "설정해야 합니다."
     ),
     "expense_configuration_missing": (
-        "You can start an expense form now. The selected budget item must have approval routing "
+        "You can start an expense form now. The selected budget item must have an approval "
+        "procedure "
         "before it can be submitted.\n"
-        "정산 양식은 바로 작성할 수 있습니다. 단, 제출하려는 재원 항목에는 승인 라우팅이 "
+        "정산 양식은 바로 작성할 수 있습니다. 단, 제출하려는 재원 항목에는 승인 절차가 "
         "설정되어 있어야 합니다."
     ),
     "operating_channel_missing": (
@@ -151,29 +152,31 @@ STRINGS = {
     "pending_approvals": "Pending Approvals / 승인 대기",
     "no_pending_approvals": "No approvals are waiting for you. / 대기 중인 승인이 없습니다.",
     "system_administration": "System Administration / 시스템 관리",
-    "administration_title": "Administration / 관리",
+    "administration_title": "시스템 설정",
     "manage_rules": "System Configuration / 시스템 설정",
-    "manage_system_channels": "System Channels / 시스템 채널",
-    "manage_roles": "Access Roles / 접근 역할",
-    "configure_rules": "Approval Routing / 승인 라우팅",
-    "admin_menu_notice": (
-        "Only system administrators can change runtime configuration.\n"
-        "시스템 관리자만 실행 중 설정을 변경할 수 있습니다."
-    ),
-    "select_rule": "Select Route / 라우팅 선택",
-    "approval_rule_title": "Approval Routing / 승인 라우팅",
-    "workflow": "Workflow / 업무 절차",
-    "required_roles": "Required Roles / 필요 역할",
-    "assigned_members": "Assigned Members / 배정된 담당자",
-    "approval_channel": "Approval Channel / 승인 채널",
-    "private_channel_only": (
-        "Select a private channel that the app has joined.\n앱이 참여한 비공개 채널을 선택해주세요."
+    "manage_system_channels": "운영 채널 설정",
+    "manage_roles": "담당자 설정",
+    "configure_rules": "승인 절차 설정",
+    "setting_to_manage": "변경할 설정",
+    "open_setting": "열기",
+    "admin_menu_notice": "시스템 관리자만 이 설정을 변경할 수 있습니다.",
+    "select_rule": "승인 대상 선택",
+    "approval_rule_title": "승인 절차 설정",
+    "workflow": "승인 순서",
+    "required_roles": "담당 역할",
+    "assigned_members": "담당자",
+    "approval_channel": "요청을 올릴 채널",
+    "private_channel_only": "앱이 참여한 비공개 채널을 선택해주세요.",
+    "approval_channel_notice": (
+        "앱이 참여한 비공개 채널을 선택하세요. 저장하면 이 학과·재원 요청은 선택한 "
+        "채널에서 승인 절차를 진행합니다."
     ),
     "save": "Save / 저장",
-    "rule_saved": "Approval route saved. / 승인 라우팅을 저장했습니다.",
+    "rule_saved": "승인 절차를 저장했습니다.",
     "rule_saved_incomplete": (
-        "The route was saved, but one or more required roles have no assigned member.\n"
-        "라우팅은 저장했지만 필수 Role 중 담당자가 없는 항목이 있습니다."
+        "The approval procedure was saved, but one or more required roles have no assigned "
+        "member.\n"
+        "승인 절차는 저장했지만 필요한 역할 중 담당자가 없는 단계가 있습니다."
     ),
     "channel_membership_error": (
         "Select a private operating channel that the app has joined.\n"
@@ -185,8 +188,8 @@ STRINGS = {
     "additional_operating_channels": "Additional Operating Channels / 추가 운영 채널",
     "system_channels_notice": (
         "Configuration is stored in PostgreSQL. Select distinct audit and alert channels, plus "
-        "any work channels not already registered by approval routing.\n"
-        "설정은 PostgreSQL에 저장됩니다. 서로 다른 감사·알림 채널과 승인 라우팅에 "
+        "any work channels not already registered by an approval procedure.\n"
+        "설정은 PostgreSQL에 저장됩니다. 서로 다른 감사·알림 채널과 승인 절차에 "
         "포함되지 않은 추가 업무 채널을 선택해주세요."
     ),
     "system_channels_error": (
@@ -204,7 +207,7 @@ STRINGS = {
     "role_configuration_notice": (
         "Roles are workspace-wide qualifications. Actual authority is the intersection of a role "
         "and membership in the operating channel.\n"
-        "Role은 워크스페이스 공통 자격이며, 실제 권한은 Role과 운영 채널 멤버십의 "
+        "역할은 워크스페이스 공통 자격이며, 실제 권한은 역할과 운영 채널 멤버십의 "
         "교집합으로 결정됩니다."
     ),
     "admin_required": "Select at least one administrator. / 관리자를 한 명 이상 선택해주세요.",
@@ -225,7 +228,7 @@ STRINGS = {
     ),
     "requester_role_required": (
         "You need the Eligible Requester role and must be a member of the selected operating "
-        "channel.\n‘신청 가능자’ Role이 있고 선택한 운영 채널의 멤버여야 신청할 수 있습니다."
+        "channel.\n‘신청 가능자’ 역할이 있고 선택한 운영 채널의 멤버여야 신청할 수 있습니다."
     ),
     "not_applicant": (
         "Only the applicant can update this request.\n신청자 본인만 이 요청을 수정할 수 있습니다."
@@ -308,8 +311,8 @@ STRINGS = {
         "선택한 항목에 유효한 승인 설정이 없습니다."
     ),
     "approval_configuration_required": (
-        "Approval routing or required role assignments are incomplete.\n"
-        "승인 라우팅 또는 필수 Role 담당자 설정이 완료되지 않았습니다."
+        "The approval procedure or required role assignments are incomplete.\n"
+        "승인 절차 또는 필요한 역할의 담당자 설정이 완료되지 않았습니다."
     ),
     "validation_error": "Please review the entered values. / 입력값을 확인해주세요.",
     "student_id_required": "Student ID is required for students. / 학생은 학번을 입력해야 합니다.",

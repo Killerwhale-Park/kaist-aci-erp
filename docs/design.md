@@ -76,7 +76,7 @@ Home의 조회 조립은 application 계층의 `UserDashboard`가 담당하고 S
 않습니다.
 
 `ApplicantProfile`은 신청자의 신분 정보만 보관합니다. 요청의 `department_id`는 회계·승인
-라우팅 문맥이므로 Profile과 합치지 않습니다. 이 분리는 단과대 예산처럼 신청자 소속 학과와
+승인 채널을 정하는 요청 문맥이므로 Profile과 합치지 않습니다. 이 분리는 단과대 예산처럼 신청자 소속 학과와
 양식·승인 경로가 무관한 경우를 보장합니다.
 
 ## Role과 채널
