@@ -853,9 +853,8 @@ def register_handlers(slack_app, database: Database) -> None:
                 request.originator_slack_user_id,
                 request.assignee_slack_user_id,
                 *request.current_approver_slack_user_ids,
-                *(await ledger.system_admin_ids()),
             }
-            if actor not in allowed:
+            if actor not in allowed and actor not in await ledger.system_admin_ids():
                 raise ApprovalPermissionError
             await safe_update_modal(
                 client,
@@ -865,6 +864,9 @@ def register_handlers(slack_app, database: Database) -> None:
             )
         except (ApprovalPermissionError, EntityNotFoundError):
             await show_modal_result(client, view_id, actor, t("unauthorized"))
+        except Exception:
+            logger.exception("Failed to load work request details")
+            await show_modal_result(client, view_id, actor, t("configuration_load_error"))
 
     @slack_app.action("approve_work_request")
     async def approve_work_request(ack, body, client, respond):

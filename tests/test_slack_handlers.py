@@ -119,6 +119,40 @@ async def test_received_settlement_is_listed_and_can_start_after_loading_view(
 
 
 @pytest.mark.asyncio
+async def test_related_user_can_view_work_request_without_admin_lookup(
+    slack_client, database, monkeypatch
+) -> None:
+    ledger = LedgerRepository(slack_client, database)
+    await register_test_channels(ledger)
+    command = settlement_command()
+    request = await ledger.create_work_request(
+        settlement_created_data(command, department_by_id(command.department_id))
+    )
+    handlers = registered_handlers(database)
+
+    async def ack(**_kwargs) -> None:
+        slack_client.call_order.append("ack")
+
+    async def unexpected_admin_lookup(_self) -> set[str]:
+        raise AssertionError("directly related users do not need an administrator query")
+
+    monkeypatch.setattr(LedgerRepository, "system_admin_ids", unexpected_admin_lookup)
+
+    await handlers.actions["view_work_request"](
+        ack,
+        {
+            "trigger_id": "TRIGGER",
+            "user": {"id": command.assignee_slack_user_id},
+            "actions": [{"value": request.id}],
+        },
+        slack_client,
+    )
+
+    assert slack_client.call_order[:3] == ["ack", "views_open", "views_update"]
+    assert slack_client.opened_views["V1"]["callback_id"] == "work_request_details"
+
+
+@pytest.mark.asyncio
 async def test_purchase_submission_persists_and_refreshes_sender_and_receiver_homes(
     slack_client, database
 ) -> None:
