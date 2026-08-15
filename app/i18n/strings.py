@@ -172,7 +172,7 @@ STRINGS = {
         "채널에서 승인 절차를 진행합니다."
     ),
     "save": "Save / 저장",
-    "rule_saved": "승인 절차를 저장했습니다.",
+    "rule_saved": "승인 절차를 저장했습니다. 창을 닫고 App Home을 새로고침해주세요.",
     "rule_saved_incomplete": (
         "The approval procedure was saved, but one or more required roles have no assigned "
         "member.\n"

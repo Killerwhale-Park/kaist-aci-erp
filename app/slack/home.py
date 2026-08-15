@@ -137,7 +137,7 @@ def _configuration_notice(dashboard: UserDashboard) -> str | None:
         return "신청 권한이 없습니다. 운영 관리자에게 역할을 요청하세요."
     missing: list[str] = []
     if not access.expense_ready:
-        missing.append("승인 경로")
+        missing.append("승인 절차")
     if not access.purchase_ready:
         missing.append("운영 채널")
     if missing:
