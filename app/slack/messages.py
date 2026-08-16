@@ -4,6 +4,7 @@ from app.domain.enums import (
     ApplicantType,
     ApprovalStepStatus,
     EvidenceSubmissionStatus,
+    EvidenceTiming,
     RequestStatus,
     WorkRequestKind,
     WorkRequestStatus,
@@ -32,6 +33,10 @@ STEP_MARKERS = {
 
 def status_text(status: RequestStatus) -> str:
     return t(STATUS_KEYS[status])
+
+
+def evidence_timing_text(timing: EvidenceTiming) -> str:
+    return t("pre_evidence" if timing == EvidenceTiming.PRE else "post_evidence")
 
 
 def format_amount(amount: Decimal, currency: str) -> str:
@@ -137,10 +142,13 @@ def request_message_blocks(request: ExpenseRequest, *, include_actions: bool = T
         if evidence.status == EvidenceSubmissionStatus.SUBMITTED and evidence.url:
             evidence_url = escape_mrkdwn(evidence.url)
             evidence_lines.append(
-                f"✓ *{name}* ({evidence.timing.value}) — <{evidence_url}|{t('view')}>"
+                f"✓ *{name}* ({evidence_timing_text(evidence.timing)}) — "
+                f"<{evidence_url}|{t('view')}>"
             )
         else:
-            evidence_lines.append(f"○ *{name}* ({evidence.timing.value}) — {requirement_label}")
+            evidence_lines.append(
+                f"○ *{name}* ({evidence_timing_text(evidence.timing)}) — {requirement_label}"
+            )
     blocks.append(
         {
             "type": "section",
@@ -227,12 +235,16 @@ def work_request_blocks(request: WorkRequest, *, include_actions: bool = True) -
         WorkRequestStatus.REJECTED: t("status_rejected"),
         WorkRequestStatus.COMPLETED: t("work_status_completed"),
     }[request.status]
+    department_name = display_name(
+        escape_mrkdwn(request.department.name_en),
+        escape_mrkdwn(request.department.name_ko),
+    )
     fields = [
         {"type": "mrkdwn", "text": f"*{t('requester')}*\n<@{request.requester_slack_user_id}>"},
         {"type": "mrkdwn", "text": f"*{t('assignee')}*\n<@{request.assignee_slack_user_id}>"},
         {
             "type": "mrkdwn",
-            "text": f"*{t('department')}*\n{escape_mrkdwn(request.department.name_en)}",
+            "text": f"*{t('department')}*\n{department_name}",
         },
         {"type": "mrkdwn", "text": f"*{t('status')}*\n{status}"},
         {"type": "mrkdwn", "text": f"*{t('purchase_subject')}*\n{escape_mrkdwn(request.subject)}"},
@@ -271,6 +283,10 @@ def work_request_blocks(request: WorkRequest, *, include_actions: bool = True) -
     if request.status == WorkRequestStatus.IN_APPROVAL:
         current = current_work_approval_step(request)
         reviewers = ", ".join(f"<@{item.slack_user_id}>" for item in current.approvers)
+        current_step_name = display_name(
+            escape_mrkdwn(current.name_en),
+            escape_mrkdwn(current.name_ko),
+        )
         blocks.append(
             {
                 "type": "section",
@@ -279,7 +295,7 @@ def work_request_blocks(request: WorkRequest, *, include_actions: bool = True) -
                     "text": (
                         f"*{t('approval_progress')}*\n"
                         f"{current.step_order}/{len(request.approval_steps)} · "
-                        f"{escape_mrkdwn(current.name_en)}\n\n"
+                        f"{current_step_name}\n\n"
                         f"*{t('current_reviewer')}*\n{reviewers}"
                     ),
                 },

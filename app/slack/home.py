@@ -1,6 +1,7 @@
 from app.application.dashboard import UserDashboard
 from app.application.work_items import WorkItem, WorkItemAction
 from app.domain.enums import ApplicantType
+from app.i18n import display_name, t
 from app.slack.utils import escape_mrkdwn
 
 
@@ -17,7 +18,7 @@ def app_home_view(dashboard: UserDashboard) -> dict:
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": "정산·구매 요청과 승인 업무를 Slack에서 처리합니다.",
+                    "text": t("home_tagline"),
                 }
             ],
         },
@@ -29,13 +30,16 @@ def app_home_view(dashboard: UserDashboard) -> dict:
                 {
                     "type": "button",
                     "action_id": "refresh_home",
-                    "text": {"type": "plain_text", "text": "새로고침"},
+                    "text": {"type": "plain_text", "text": t("refresh")},
                     "value": "refresh",
                 }
             ],
         },
         {"type": "divider"},
-        {"type": "section", "text": {"type": "mrkdwn", "text": "*새 요청*"}},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*{t('home_new_requests')}*"},
+        },
     ]
     quick_actions = _quick_actions(dashboard)
     if quick_actions:
@@ -56,8 +60,10 @@ def app_home_view(dashboard: UserDashboard) -> dict:
         )
 
     # Outstanding work is intentionally shown before sent requests.
-    blocks.extend(_work_queue_section("내가 처리할 일", dashboard.work_queue.action_required))
-    blocks.extend(_work_queue_section("진행 중인 요청", dashboard.work_queue.submitted))
+    blocks.extend(
+        _work_queue_section(t("my_action_required"), dashboard.work_queue.action_required)
+    )
+    blocks.extend(_work_queue_section(t("my_active_requests"), dashboard.work_queue.submitted))
 
     if dashboard.capabilities.can_manage_configuration:
         blocks.extend(
@@ -67,12 +73,14 @@ def app_home_view(dashboard: UserDashboard) -> dict:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "*시스템 설정*\n역할, 운영 채널과 승인 절차를 관리합니다.",
+                        "text": (
+                            f"*{t('home_system_settings')}*\n{t('home_system_settings_help')}"
+                        ),
                     },
                     "accessory": {
                         "type": "button",
                         "action_id": "manage_rules",
-                        "text": {"type": "plain_text", "text": "설정 열기"},
+                        "text": {"type": "plain_text", "text": t("home_open_settings")},
                         "value": "rules",
                     },
                 },
@@ -84,13 +92,13 @@ def app_home_view(dashboard: UserDashboard) -> dict:
 def _profile_block(dashboard: UserDashboard) -> dict:
     profile = dashboard.applicant_profile
     if profile is None:
-        text = "*내 정보*\n정산 신청 전에 학생/교수 구분과 학번 또는 사번을 설정해주세요."
-        label = "정보 설정"
+        text = f"*{t('profile_heading')}*\n{t('profile_missing')}"
+        label = t("profile_setup")
         style = "primary"
     else:
-        kind = "학생" if profile.applicant_type == ApplicantType.STUDENT else "교수"
-        text = f"*내 정보*\n{kind} · {escape_mrkdwn(profile.applicant_identifier)}"
-        label = "정보 수정"
+        kind = t("student" if profile.applicant_type == ApplicantType.STUDENT else "professor")
+        text = f"*{t('profile_heading')}*\n{kind} · {escape_mrkdwn(profile.applicant_identifier)}"
+        label = t("profile_edit")
         style = None
     button = {
         "type": "button",
@@ -111,11 +119,13 @@ def _quick_actions(dashboard: UserDashboard) -> list[dict]:
     access = dashboard.capabilities
     actions: list[dict] = []
     if access.can_request:
-        actions.append(_button("new_expense_request", "정산 신청", "new", primary=True))
+        actions.append(_button("new_expense_request", t("new_request_short"), "new", primary=True))
     if access.can_request and access.purchase_ready:
-        actions.append(_button("new_purchase_work_request", "구매 요청", "purchase"))
+        actions.append(_button("new_purchase_work_request", t("new_purchase_request"), "purchase"))
     if access.can_assign_settlement and access.purchase_ready:
-        actions.append(_button("new_settlement_work_request", "정산 요청 보내기", "settlement"))
+        actions.append(
+            _button("new_settlement_work_request", t("new_settlement_request"), "settlement")
+        )
     return actions
 
 
@@ -134,30 +144,33 @@ def _button(action_id: str, label: str, value: str, *, primary: bool = False) ->
 def _configuration_notice(dashboard: UserDashboard) -> str | None:
     access = dashboard.capabilities
     if not access.can_request:
-        return "신청 권한이 없습니다. 운영 관리자에게 역할을 요청하세요."
+        return t("home_request_permission_missing")
     missing: list[str] = []
     if not access.expense_ready:
-        missing.append("승인 절차")
+        missing.append(t("configure_rules"))
     if not access.purchase_ready:
-        missing.append("운영 채널")
+        missing.append(t("manage_system_channels"))
     if missing:
-        return f"관리자 설정 필요: {', '.join(missing)}"
+        return t("home_configuration_required", items=", ".join(missing))
     return None
 
 
 _ACTION_PRESENTATION = {
-    WorkItemAction.VIEW_EXPENSE: ("view_request", "보기"),
-    WorkItemAction.VIEW_WORK: ("view_work_request", "보기"),
-    WorkItemAction.EDIT_EXPENSE: ("edit_request", "수정"),
-    WorkItemAction.SUBMIT_POST_EVIDENCE: ("add_post_evidence", "사후 증빙"),
-    WorkItemAction.APPROVE_EXPENSE: ("approve_request", "승인"),
-    WorkItemAction.REQUEST_EXPENSE_CHANGES: ("request_changes", "수정 요청"),
-    WorkItemAction.REJECT_EXPENSE: ("reject_request", "반려"),
-    WorkItemAction.APPROVE_WORK: ("approve_work_request", "승인"),
-    WorkItemAction.REJECT_WORK: ("reject_work_request", "반려"),
-    WorkItemAction.HANDOFF_PURCHASE: ("handoff_purchase_to_settlement", "결제 완료"),
-    WorkItemAction.START_SETTLEMENT: ("start_assigned_settlement", "정산 시작"),
-    WorkItemAction.COMPLETE_WORK: ("complete_work_request", "완료"),
+    WorkItemAction.VIEW_EXPENSE: ("view_request", "view"),
+    WorkItemAction.VIEW_WORK: ("view_work_request", "view"),
+    WorkItemAction.EDIT_EXPENSE: ("edit_request", "edit_request"),
+    WorkItemAction.SUBMIT_POST_EVIDENCE: ("add_post_evidence", "submit_post_evidence"),
+    WorkItemAction.APPROVE_EXPENSE: ("approve_request", "approve"),
+    WorkItemAction.REQUEST_EXPENSE_CHANGES: ("request_changes", "request_changes"),
+    WorkItemAction.REJECT_EXPENSE: ("reject_request", "reject"),
+    WorkItemAction.APPROVE_WORK: ("approve_work_request", "approve"),
+    WorkItemAction.REJECT_WORK: ("reject_work_request", "reject"),
+    WorkItemAction.HANDOFF_PURCHASE: (
+        "handoff_purchase_to_settlement",
+        "payment_complete_handoff",
+    ),
+    WorkItemAction.START_SETTLEMENT: ("start_assigned_settlement", "start_settlement"),
+    WorkItemAction.COMPLETE_WORK: ("complete_work_request", "mark_completed"),
 }
 
 
@@ -173,12 +186,15 @@ def _work_queue_section(title: str, items: tuple[WorkItem, ...]) -> list[dict]:
         blocks.append(
             {
                 "type": "context",
-                "elements": [{"type": "mrkdwn", "text": "현재 항목이 없습니다."}],
+                "elements": [{"type": "mrkdwn", "text": t("no_current_items")}],
             }
         )
         return blocks
     for item in items[:10]:
-        title_text = escape_mrkdwn(item.title_ko or item.title_en)
+        title_text = display_name(
+            escape_mrkdwn(item.title_en),
+            escape_mrkdwn(item.title_ko),
+        )
         blocks.append(
             {
                 "type": "section",
@@ -194,11 +210,11 @@ def _work_queue_section(title: str, items: tuple[WorkItem, ...]) -> list[dict]:
         )
         actions = []
         for action in item.actions:
-            action_id, label = _ACTION_PRESENTATION[action]
+            action_id, label_key = _ACTION_PRESENTATION[action]
             button = {
                 "type": "button",
                 "action_id": action_id,
-                "text": {"type": "plain_text", "text": label},
+                "text": {"type": "plain_text", "text": t(label_key)},
                 "value": item.source_id,
             }
             if action in {WorkItemAction.APPROVE_EXPENSE, WorkItemAction.APPROVE_WORK}:
@@ -212,12 +228,13 @@ def _work_queue_section(title: str, items: tuple[WorkItem, ...]) -> list[dict]:
 
 
 def _work_item_status(status: str) -> str:
-    return {
-        "IN_APPROVAL": "승인 진행 중",
-        "CHANGES_REQUESTED": "수정 필요",
-        "APPROVED_PENDING_POST_EVIDENCE": "사후 증빙 필요",
-        "ACTION_REQUIRED": "처리 필요",
-        "OPEN": "처리 필요",
-        "REJECTED": "반려",
-        "COMPLETED": "완료",
-    }.get(status, escape_mrkdwn(status))
+    key = {
+        "IN_APPROVAL": "status_in_approval",
+        "CHANGES_REQUESTED": "status_changes_requested",
+        "APPROVED_PENDING_POST_EVIDENCE": "status_approved_pending_post_evidence",
+        "ACTION_REQUIRED": "work_status_action_required",
+        "OPEN": "work_status_open",
+        "REJECTED": "status_rejected",
+        "COMPLETED": "status_completed",
+    }.get(status)
+    return t(key) if key else escape_mrkdwn(status)

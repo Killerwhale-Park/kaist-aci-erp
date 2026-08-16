@@ -183,6 +183,7 @@ def test_applicant_profile_form_switches_between_student_and_employee_id() -> No
     assert student_identifier["element"]["initial_value"] == "202600001"
     assert "사번" in professor_identifier["label"]["text"]
     assert professor_identifier["element"]["initial_value"] == "E12345"
+    assert student["title"]["text"] == "My Profile / 내 정보"
 
 
 def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
@@ -231,6 +232,10 @@ def test_runtime_configuration_modals_use_native_slack_selectors() -> None:
         "U_PROFESSOR_A",
         "U_PROFESSOR_B",
     ]
+    editor_text = str(editor)
+    assert "Step 1 / 1단계" in editor_text
+    assert "Professors / 교수" in editor_text
+    assert "Approval Channel / 요청 채널" in editor_text
     validated_view(editor)
     role_inputs = [block for block in roles["blocks"] if block["type"] == "input"]
     assert len(role_inputs) == 5

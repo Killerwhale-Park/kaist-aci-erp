@@ -36,7 +36,7 @@ def _category_option(category: ExpenseCategory) -> dict:
     return {
         "text": {
             "type": "plain_text",
-            "text": f"{name_ko} / {name_en}"[:75],
+            "text": display_name(name_en, name_ko)[:75],
         },
         "value": category.id,
     }
@@ -152,7 +152,7 @@ def expense_context_modal(
                     "text": (
                         f"*{t('applicant')}*\n<@{profile.slack_user_id}>\n"
                         f"{applicant_kind} · `{profile.applicant_identifier}`\n"
-                        "_내 정보 설정에 저장된 값을 사용합니다._"
+                        f"_{t('profile_reuse_notice')}_"
                     ),
                 },
             },
@@ -205,7 +205,7 @@ def applicant_profile_modal(
                 **(continuation or {}),
             }
         ),
-        "title": {"type": "plain_text", "text": "내 정보 설정"},
+        "title": {"type": "plain_text", "text": t("profile_heading")},
         "submit": {"type": "plain_text", "text": t("save")},
         "close": {"type": "plain_text", "text": t("cancel")},
         "blocks": [
@@ -750,7 +750,7 @@ def approval_rule_editor_modal(
             ],
         },
     ]
-    role_names = {role.id: role.name_ko for role in role_definitions()}
+    role_names = {role.id: display_name(role.name_en, role.name_ko) for role in role_definitions()}
     role_order: list[str] = []
     for index, step in enumerate(steps):
         for role_id in step.get("approver_roles") or []:
@@ -771,7 +771,8 @@ def approval_rule_editor_modal(
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f"*{index + 1}단계 · {step_name}*\n{t('required_roles')}: {roles}"
+                            f"*{t('approval_step_number', number=index + 1)} · {step_name}*\n"
+                            f"{t('required_roles')}: {roles}"
                         ),
                     },
                 },
@@ -794,7 +795,7 @@ def approval_rule_editor_modal(
             "action_id": "value",
             "placeholder": {
                 "type": "plain_text",
-                "text": t("select_role_assignees", role=role_names.get(role_id, role_id)),
+                "text": t("select_person"),
             },
         }
         if selected:
@@ -947,6 +948,7 @@ def _evidence_fields(
         key = getattr(item, "evidence_key", None) or item.requirement_key
         optional = item.requirement == EvidenceRequirementLevel.OPTIONAL
         label_suffix = t("optional") if optional else t("required")
+        item_name = display_name(item.name_en, item.name_ko)
         initial_url = getattr(item, "url", None)
         initial_note = getattr(item, "note", None)
         blocks.append(
@@ -956,7 +958,7 @@ def _evidence_fields(
                 "optional": optional,
                 "label": {
                     "type": "plain_text",
-                    "text": f"{item.name_en} / {item.name_ko} ({label_suffix})"[:2000],
+                    "text": f"{item_name} ({label_suffix})"[:2000],
                 },
                 "element": input_element("value", initial_value=initial_url),
             }
@@ -984,7 +986,7 @@ def _evidence_fields(
                 "optional": True,
                 "label": {
                     "type": "plain_text",
-                    "text": f"{item.name_en} — {t('evidence_note')}"[:2000],
+                    "text": f"{item_name} · {t('evidence_note')}"[:2000],
                 },
                 "element": input_element("value", initial_value=initial_note, multiline=True),
             }

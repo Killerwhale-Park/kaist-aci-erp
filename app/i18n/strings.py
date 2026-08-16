@@ -9,6 +9,34 @@ STRINGS = {
         "여기서 요청을 시작하고, 진행 상황은 ‘내가 보낸 처리 중 요청’에서 확인하세요. "
         "배정받은 업무와 승인 요청은 ‘내가 받은 요청·할 일’에 표시됩니다."
     ),
+    "home_tagline": (
+        "Handle expense, purchase, and approval work in Slack. / "
+        "정산·구매 요청과 승인 업무를 Slack에서 처리합니다."
+    ),
+    "home_new_requests": "New Requests / 새 요청",
+    "home_system_settings": "System Configuration / 시스템 설정",
+    "home_system_settings_help": (
+        "Manage assignees, operating channels, and approval procedures. / "
+        "담당자, 운영 채널과 승인 절차를 관리합니다."
+    ),
+    "home_open_settings": "Open Settings / 설정 열기",
+    "profile_heading": "My Profile / 내 정보",
+    "profile_missing": (
+        "Set your student/professor type and student or employee ID before submitting an "
+        "expense. / 정산 신청 전에 학생·교수 구분과 학번 또는 사번을 설정해주세요."
+    ),
+    "profile_setup": "Set Profile / 정보 설정",
+    "profile_edit": "Edit Profile / 정보 수정",
+    "profile_saved": "Profile saved. / 내 정보를 저장했습니다.",
+    "profile_reuse_notice": (
+        "Values saved in My Profile are used here. / 내 정보 설정에 저장된 값을 사용합니다."
+    ),
+    "home_request_permission_missing": (
+        "You do not have request access. Ask an administrator to assign your role. / "
+        "신청 권한이 없습니다. 운영 관리자에게 역할을 요청하세요."
+    ),
+    "home_configuration_required": "Administrator setup required / 관리자 설정 필요: {items}",
+    "no_current_items": "No current items. / 현재 항목이 없습니다.",
     "start_request": "Start / 요청 시작",
     "refresh": "Refresh / 새로고침",
     "expense_start_help": (
@@ -33,15 +61,15 @@ STRINGS = {
     "settlement_title": "Settlement / 정산 요청",
     "send_request": "Send / 보내기",
     "request_channel": "Request Channel / 요청 채널",
-    "select_channel": "Select a private channel",
+    "select_channel": "Select Channel / 채널 선택",
     "work_channel_notice": (
         "The app must already be a member of the selected private channel. "
         "구매 요청과 정산 요청은 같은 채널 또는 서로 다른 채널로 보낼 수 있습니다."
     ),
     "purchase_assignee": "Buyer / 구매 담당 교수",
     "settlement_assignee": "Student / 정산 담당 학생",
-    "select_person": "Select a person",
-    "select_student": "Select a student",
+    "select_person": "Select Person / 담당자 선택",
+    "select_student": "Select Student / 학생 선택",
     "item_name": "Item / 물품명",
     "product_url": "Product URL / 구매 URL",
     "quantity": "Quantity / 수량",
@@ -152,38 +180,53 @@ STRINGS = {
     "pending_approvals": "Pending Approvals / 승인 대기",
     "no_pending_approvals": "No approvals are waiting for you. / 대기 중인 승인이 없습니다.",
     "system_administration": "System Administration / 시스템 관리",
-    "administration_title": "시스템 설정",
+    "administration_title": "System Setup / 시스템 설정",
     "manage_rules": "System Configuration / 시스템 설정",
-    "manage_system_channels": "운영 채널 설정",
-    "manage_roles": "담당자 설정",
-    "configure_rules": "승인 절차 설정",
-    "setting_to_manage": "변경할 설정",
-    "open_setting": "열기",
-    "admin_menu_notice": "시스템 관리자만 이 설정을 변경할 수 있습니다.",
-    "select_rule": "승인 대상 선택",
-    "approval_rule_title": "승인 절차 설정",
-    "workflow": "승인 순서",
-    "required_roles": "담당 역할",
-    "assigned_members": "담당자",
-    "approval_channel": "요청을 올릴 채널",
-    "private_channel_only": "앱이 참여한 비공개 채널을 선택해주세요.",
+    "manage_system_channels": "Operating Channels / 운영 채널 설정",
+    "manage_roles": "Assignees / 담당자 설정",
+    "configure_rules": "Approval Procedure / 승인 절차 설정",
+    "setting_to_manage": "Setting / 변경할 설정",
+    "open_setting": "Open / 열기",
+    "admin_menu_notice": (
+        "Only system administrators can change these settings. / "
+        "시스템 관리자만 이 설정을 변경할 수 있습니다."
+    ),
+    "select_rule": "Approval Target / 승인 대상",
+    "approval_rule_title": "Approval Setup / 승인 절차",
+    "workflow": "Approval Order / 승인 순서",
+    "required_roles": "Required Roles / 담당 역할",
+    "assigned_members": "Assignees / 담당자",
+    "approval_channel": "Approval Channel / 요청 채널",
+    "private_channel_only": (
+        "Select a private channel that the app has joined. / "
+        "앱이 참여한 비공개 채널을 선택해주세요."
+    ),
     "approval_channel_notice": (
-        "앱이 참여한 비공개 채널을 선택하세요. 저장하면 이 학과·재원 요청은 선택한 "
-        "채널에서 승인 절차를 진행합니다."
+        "Select a private channel that the app has joined. Requests for this department and "
+        "budget item will follow the approval procedure in that channel.\n"
+        "앱이 참여한 비공개 채널을 선택하세요. 이 학과·재원 요청은 선택한 채널에서 "
+        "승인 절차를 진행합니다."
     ),
     "approval_assignee_notice": (
-        "*단계별 담당자*\n각 역할의 담당자를 선택하세요. 이 담당자 설정은 다른 승인 절차에서도 "
+        "*Step Assignees / 단계별 담당자*\nSelect the assignees for each role. Role assignments "
+        "are shared by other approval procedures, and only assignees who belong to the selected "
+        "channel receive approval authority.\n"
+        "각 역할의 담당자를 선택하세요. 이 담당자 설정은 다른 승인 절차에서도 "
         "같은 역할에 공통으로 적용되며, 실제 승인 권한은 선택한 채널에 참여한 담당자에게만 "
         "부여됩니다."
     ),
     "role_assignees": "{role}",
-    "select_role_assignees": "{role} 선택",
     "approval_assignees_invalid": (
-        "각 단계의 담당자를 한 명 이상 선택하고, 선택한 담당자가 모두 승인 채널에 참여했는지 "
-        "확인해주세요."
+        "Select at least one assignee for every step and confirm that all assignees belong to "
+        "the approval channel.\n각 단계의 담당자를 한 명 이상 선택하고, 선택한 담당자가 모두 "
+        "승인 채널에 참여했는지 확인해주세요."
     ),
+    "approval_step_number": "Step {number} / {number}단계",
     "save": "Save / 저장",
-    "rule_saved": "승인 절차를 저장했습니다. 변경 사항이 바로 적용됩니다.",
+    "rule_saved": (
+        "Approval procedure saved. Changes apply immediately. / "
+        "승인 절차를 저장했습니다. 변경 사항이 바로 적용됩니다."
+    ),
     "rule_saved_incomplete": (
         "The approval procedure was saved, but one or more required roles have no assigned "
         "member.\n"
@@ -223,7 +266,7 @@ STRINGS = {
     ),
     "admin_required": "Select at least one administrator. / 관리자를 한 명 이상 선택해주세요.",
     "roles_saved": "Access roles updated. / 접근 역할을 변경했습니다.",
-    "request_title": "Expense Request {reference}",
+    "request_title": "Expense Request {reference} / 정산 신청 {reference}",
     "category": "Category / 지출 항목",
     "status": "Status / 상태",
     "approval_progress": "Approval Progress / 승인 진행",

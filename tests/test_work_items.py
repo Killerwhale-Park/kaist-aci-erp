@@ -125,7 +125,14 @@ def test_home_renders_active_and_action_required_queues() -> None:
         for block in view["blocks"]
         if settlement.reference_number in block.get("text", {}).get("text", "")
     ]
+    rendered = str(view)
     assert len(references) == 1
+    assert "Received & Action Required" in rendered
+    assert "내가 받은 요청·할 일" in rendered
+    assert "Settlement Request" in rendered
+    assert "정산 요청" in rendered
+    assert "Start Expense" in rendered
+    assert "정산 작성" in rendered
     assert len(view["blocks"]) <= 100
     slack_view = View(**view)
     assert slack_view.validate_json() is None
@@ -169,4 +176,5 @@ def test_home_only_offers_request_types_with_runtime_configuration() -> None:
     assert "refresh_home" in action_ids
     assert "configure_applicant_profile" in action_ids
     assert "manage_rules" in action_ids
+    assert "approval procedures" in page_text
     assert "승인 절차" in page_text

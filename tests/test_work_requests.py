@@ -196,6 +196,18 @@ async def test_settlement_assignment_is_stored_in_selected_channel(slack_client,
         for block in work_request_blocks(created)
         for element in block.get("elements", [])
     )
+    rendered_work_request = str(
+        work_request_blocks(
+            work_request_from_created(
+                purchase_created_data(
+                    purchase_command(),
+                    department_by_id("department_1"),
+                    purchase_workflow("U_PROF"),
+                )
+            )
+        )
+    )
+    assert "Approval 1 / 승인 1" in rendered_work_request
     with pytest.raises(InvalidStateTransitionError):
         await ledger.complete_work_request(created.id, "U_STUDENT")
 

@@ -140,7 +140,7 @@ def register_profile_handlers(slack_app, runtime: SlackRuntime) -> None:
                         ),
                     )
                 else:
-                    view = configuration_notice_modal("내 정보를 저장했습니다.")
+                    view = configuration_notice_modal(t("profile_saved"))
                 await runtime.surfaces(client).update_modal(view_id, view, actor)
                 await runtime.publish_homes(client, actor)
             except Exception:
