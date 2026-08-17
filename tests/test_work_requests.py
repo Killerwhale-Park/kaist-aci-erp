@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from slack_sdk.models.views import View
 
 from app.config.roles import SYSTEM_ADMIN_ROLE, WORKSPACE_ROLE_SCOPE, default_role_assignments
-from app.domain.catalog import department_by_id
+from app.domain.catalog import budget_item_options, category_for_budget_node, department_by_id
 from app.domain.enums import ApplicantType, WorkRequestKind, WorkRequestStatus
 from app.domain.models import ApplicantProfile, ApprovalRuleStep, ResolvedApprovalWorkflow
 from app.domain.work_requests import (
@@ -72,8 +72,8 @@ def settlement_command() -> CreateSettlementRequestCommand:
     return CreateSettlementRequestCommand(
         requester_slack_user_id="U_ADMIN",
         department_id="department_2",
+        budget_node_id="supplies",
         assignee_slack_user_id="U_STUDENT",
-        channel_id="C_DEPARTMENT_2",
         subject="Lab supplies",
         vendor="Coupang",
         amount="49000",
@@ -91,6 +91,11 @@ def test_work_request_commands_require_https_urls() -> None:
 
     settlement = settlement_command().model_dump()
     settlement["evidence_folder_url"] = "not-a-url"
+    with pytest.raises(ValidationError):
+        CreateSettlementRequestCommand(**settlement)
+
+    settlement = settlement_command().model_dump()
+    settlement.pop("budget_node_id")
     with pytest.raises(ValidationError):
         CreateSettlementRequestCommand(**settlement)
 
@@ -139,8 +144,8 @@ async def test_purchase_request_n_step_approval_and_settlement_handoff(
     handoff_command = CreateSettlementRequestCommand(
         requester_slack_user_id="U_PROF",
         department_id="department_1",
+        budget_node_id="supplies",
         assignee_slack_user_id="U_STUDENT",
-        channel_id="C_APPROVAL",
         subject=approved.subject,
         vendor="Coupang",
         amount="49000",
@@ -151,6 +156,8 @@ async def test_purchase_request_n_step_approval_and_settlement_handoff(
     handoff_data = settlement_created_data(
         handoff_command,
         department,
+        category_for_budget_node("supplies", "department_1"),
+        "C_APPROVAL",
         originator_slack_user_id=approved.originator_slack_user_id,
         case_id=approved.case_id,
         parent_request_id=approved.id,
@@ -176,16 +183,29 @@ async def test_purchase_request_n_step_approval_and_settlement_handoff(
 
 
 @pytest.mark.asyncio
-async def test_settlement_assignment_is_stored_in_selected_channel(slack_client, database) -> None:
+async def test_settlement_assignment_snapshots_budget_and_delivery_channel(
+    slack_client, database
+) -> None:
     department = department_by_id("department_2")
     ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     created = await ledger.create_work_request(
-        settlement_created_data(settlement_command(), department)
+        settlement_created_data(
+            settlement_command(),
+            department,
+            category_for_budget_node("supplies", "department_2"),
+            "C_DEPARTMENT_2",
+        )
     )
 
     assert created.kind == WorkRequestKind.SETTLEMENT
     assert created.channel_id == "C_DEPARTMENT_2"
+    assert created.budget_node_id == "supplies"
+    assert created.budget_node_path == (
+        "department_budget",
+        "academic_development",
+        "supplies",
+    )
     assert created.assignee_slack_user_id == "U_STUDENT"
     assert created.status == WorkRequestStatus.ACTION_REQUIRED
     assert created.message_ts is None
@@ -230,7 +250,7 @@ async def test_settlement_assignment_is_stored_in_selected_channel(slack_client,
 def test_work_request_modals_and_department_prefill() -> None:
     department = department_by_id("department_3")
     purchase = purchase_request_modal([department])
-    settlement = settlement_request_modal([department])
+    settlement = settlement_request_modal([department], budget_item_options())
     expense = expense_context_modal(
         ApplicantProfile("U_STUDENT", ApplicantType.STUDENT, "202500001"),
         [department],
@@ -240,6 +260,14 @@ def test_work_request_modals_and_department_prefill() -> None:
 
     assert purchase["callback_id"] == "purchase_request_create"
     assert settlement["callback_id"] == "settlement_request_create"
+    assert not any(block.get("block_id") == "work_channel" for block in settlement["blocks"])
+    budget_input = next(
+        block for block in settlement["blocks"] if block.get("block_id") == "work_budget_item"
+    )
+    budget_option = budget_input["element"]["options"][0]
+    assert budget_option["value"] == "supplies"
+    assert budget_option["text"]["text"] == "Supplies / 비품비"
+    assert "Academic Development Fund" in budget_option["description"]["text"]
     assert all(len(view["blocks"]) <= 100 for view in (purchase, settlement, expense))
     department_select = expense["blocks"][1]["element"]
     assert department_select["initial_option"]["value"] == "department_3"
@@ -252,7 +280,12 @@ def test_work_request_modals_and_department_prefill() -> None:
 def test_settlement_assignment_prefills_expense_details() -> None:
     department = department_by_id("department_2")
     assignment = work_request_from_created(
-        settlement_created_data(settlement_command(), department)
+        settlement_created_data(
+            settlement_command(),
+            department,
+            category_for_budget_node("supplies", "department_2"),
+            "C_DEPARTMENT_2",
+        )
     )
     modal = expense_details_modal({"source_work_request_id": assignment.id}, [], assignment)
     values = {

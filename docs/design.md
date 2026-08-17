@@ -23,6 +23,7 @@ Approval Workflow Configuration
 - `work_requests`, `work_request_events`: 구매 요청과 정산 배정
 - `role_assignments`: 전역 업무 Role과 Slack 사용자 ID
 - `applicant_profiles`: 정산 양식에서 재사용하는 학생/교수 구분과 학번/사번
+- `request_contexts`: Slack 대화별 학과·기본 재원 입력값
 - `approval_routes`: 학과·재원 항목과 승인 채널 연결
 - `system_settings`, `operating_channels`: 감사·경고·운영 채널
 - `audit_events`: 설정 변경과 운영 경고
@@ -38,6 +39,10 @@ Approval Workflow Configuration
 버튼 값은 내부 요청 UUID입니다. Slack `message_ts`는 메시지를 갱신하기 위한 보조값일 뿐 식별자나 원장이 아닙니다. 메시지가 삭제되면 다음 갱신 시 새 메시지를 만들고 새 `message_ts`를 DB에 연결합니다.
 
 `case_id`, `parent_request_id`, `source_work_request_id`가 구매 요청 → 정산 업무 → 정산 신청의 계보를 연결합니다. 인계 transaction은 선행 작업 완료 event와 후속 작업 생성 event를 함께 기록합니다.
+
+정산 업무 생성 event에는 배정자가 확정한 Budget Node와 당시 경로 이름을 snapshot으로
+저장합니다. 담당 학생은 이를 상속할 뿐 변경하지 않습니다. Expense Form은 독립된 mapping으로
+해석하므로 재원 엔티티와 양식 엔티티를 합치지 않습니다.
 
 ## 승인 상태 전이
 
@@ -88,8 +93,9 @@ Role 정의와 capability는 코드 기반 업무 정책입니다. 사람 교체
 - `ADMIN_STAFF`: 행정팀, 정산 배정 가능
 - `SYSTEM_ADMIN`: Role·채널·승인 route 관리
 
-실제 권한은 전역 Role 보유자와 해당 운영 채널 멤버의 교집합입니다. 신청자는
-`Eligible Requester` 자격과 운영 채널 멤버십을 모두 충족해야 합니다.
+역할 기반 승인자는 전역 Role 보유자와 승인 채널 멤버의 교집합입니다. 요청에서 명시적으로
+지정된 담당자는 전역 Role로 검증하여 DM에서도 처리할 수 있습니다. 구매 신청자는
+`Eligible Requester` 자격과 선택한 운영 대화 멤버십을 모두 충족해야 합니다.
 
 ## Slack 채널
 
@@ -98,6 +104,10 @@ Role 정의와 capability는 코드 기반 업무 정책입니다. 사람 교체
 - Operating: 신청·승인 메시지 표시
 
 동일한 운영 채널을 여러 승인 route가 공유할 수 있습니다. 채널 분리는 접근 권한과 업무 맥락을 위한 것이며 저장소 분할이 아닙니다.
+
+`RequestContext`는 채널 또는 앱 DM에 붙는 반복 입력 기본값입니다. 승인 route나 저장 위치가
+아니며, `/expense setup`으로 저장한 학과·재원을 `/expense`, `/expense purchase`,
+`/expense settlement`가 재사용합니다.
 
 Slack 메시지는 보존 기간과 무관하게 삭제 가능한 projection입니다. DB의 event와 audit row가 공식 시스템 이력입니다.
 

@@ -29,6 +29,7 @@ from app.domain.models import (
     ApprovalRule,
     ApprovalRuleStep,
     ExpenseRequest,
+    RequestContext,
     ResolvedApprovalWorkflow,
     WorkRequest,
 )
@@ -59,6 +60,7 @@ from app.ledger.tables import (
     ExpenseEventRecord,
     ExpenseRequestRecord,
     OperatingChannelRecord,
+    RequestContextRecord,
     RoleAssignmentRecord,
     SystemSettingsRecord,
     WorkRequestEventRecord,
@@ -344,7 +346,7 @@ class LedgerRepository:
 
     async def create_work_request(self, created_data: dict[str, Any]) -> WorkRequest:
         provisional = work_request_from_created(created_data)
-        if provisional.channel_id not in await self.registered_operation_channel_ids():
+        if not await self.is_operating_conversation(provisional.channel_id):
             raise ConfigurationError("The selected channel is not a registered operating channel")
         occurred_at = datetime.fromisoformat(created_data["created_at"])
         summary = work_request_summary(provisional)
@@ -512,7 +514,7 @@ class LedgerRepository:
         actual_id = _record_id(source_request_id)
         if successor.parent_request_id != actual_id:
             raise ConfigurationError("Successor does not reference its source work request")
-        if successor.channel_id not in await self.registered_operation_channel_ids():
+        if not await self.is_operating_conversation(successor.channel_id):
             raise ConfigurationError("The selected channel is not a registered operating channel")
         async with self.database.session() as session, session.begin():
             source_record = await session.scalar(
@@ -968,10 +970,15 @@ class LedgerRepository:
         return bool(manual_channel or route_channel), bool(route_channel)
 
     async def assert_operating_channel(self, channel_id: str) -> None:
-        if channel_id not in await self.registered_operation_channel_ids():
-            raise ConfigurationError("The selected channel is not a registered operating channel")
-        if not await self.channel_is_available(channel_id):
+        if not await self.is_operating_conversation(channel_id):
             raise ConfigurationError("The app is not a member of the selected operating channel")
+
+    async def is_operating_conversation(self, conversation_id: str) -> bool:
+        if conversation_id.startswith("D"):
+            return await self.channel_is_available(conversation_id)
+        if conversation_id not in await self.registered_operation_channel_ids():
+            return False
+        return await self.channel_is_available(conversation_id)
 
     async def get_rule(self, department_id: str, category_id: str) -> ApprovalRule:
         category = category_by_id(category_id, department_id)
@@ -1059,12 +1066,14 @@ class LedgerRepository:
             for role in step.approver_roles:
                 role_members.update(workspace.get(role, set()))
             if step.actor_binding:
+                # Explicitly assigned actors may approve from their DM. Their workspace role is
+                # still required, but delivery-channel membership is not an authorization input.
                 approvers = set(bindings.get(step.actor_binding, set()))
                 if step.approver_roles:
                     approvers.intersection_update(role_members)
             else:
                 approvers = role_members
-            approvers.intersection_update(channel_members)
+                approvers.intersection_update(channel_members)
             resolved_steps.append(
                 ApprovalRuleStep(
                     name_en=step.name_en,
@@ -1296,6 +1305,65 @@ class LedgerRepository:
             applicant_type=applicant_type,
             applicant_identifier=identifier,
         )
+
+    async def request_context(self, conversation_id: str) -> RequestContext | None:
+        async with self.database.session() as session:
+            record = await session.get(RequestContextRecord, conversation_id)
+        if record is None:
+            return None
+        return RequestContext(
+            conversation_id=record.conversation_id,
+            department_id=record.department_id,
+            budget_node_id=record.budget_node_id,
+        )
+
+    async def save_request_context(
+        self,
+        actor: str,
+        *,
+        conversation_id: str,
+        department_id: str,
+        budget_node_id: str,
+    ) -> RequestContext:
+        await self.assert_can_manage_request_context(actor, conversation_id)
+        async with self.database.session() as session, session.begin():
+            record = await session.get(RequestContextRecord, conversation_id)
+            if record is None:
+                record = RequestContextRecord(
+                    conversation_id=conversation_id,
+                    department_id=department_id,
+                    budget_node_id=budget_node_id,
+                    updated_by_slack_user_id=actor,
+                )
+                session.add(record)
+            else:
+                record.department_id = department_id
+                record.budget_node_id = budget_node_id
+                record.updated_by_slack_user_id = actor
+                record.updated_at = _utc_now()
+            await self._audit(
+                session,
+                event_type="REQUEST_CONTEXT_UPDATED",
+                actor=actor,
+                entity_type="request_context",
+                entity_id=conversation_id,
+                summary=f"Request context updated: {conversation_id}",
+                detail={
+                    "department_id": department_id,
+                    "budget_node_id": budget_node_id,
+                },
+            )
+        return RequestContext(
+            conversation_id=conversation_id,
+            department_id=department_id,
+            budget_node_id=budget_node_id,
+        )
+
+    async def assert_can_manage_request_context(self, actor: str, conversation_id: str) -> None:
+        if conversation_id.startswith("D"):
+            await self.assert_channel_member(actor, conversation_id)
+            return
+        await self.assert_system_admin(actor)
 
     async def role_user_ids(self, role_id: str) -> set[str]:
         return set((await self.role_assignments())[WORKSPACE_ROLE_SCOPE].get(role_id, set()))

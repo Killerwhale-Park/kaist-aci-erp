@@ -26,6 +26,7 @@ class FakeSlackClient:
             "C_APPROVAL",
             "C_DEPARTMENT_2",
             "C_WORK",
+            "D_APP",
         }
         self.channel_members = {
             "C_SYSTEM": {"U_ROOT"},
@@ -39,6 +40,7 @@ class FakeSlackClient:
             },
             "C_DEPARTMENT_2": {"U_OTHER_STUDENT", "U_OTHER_PROFESSOR"},
             "C_WORK": {"U_REQUESTER", "U_PROFESSOR"},
+            "D_APP": {"U_REQUESTER"},
         }
         self.counter = 0
 

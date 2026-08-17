@@ -25,6 +25,7 @@ class CreatePurchaseRequestCommand(BaseModel):
     department_id: str
     assignee_slack_user_id: str
     channel_id: str
+    source_conversation_id: str | None = None
     item_name: str = Field(min_length=1, max_length=240)
     product_url: str = Field(max_length=2000)
     quantity: int = Field(gt=0, le=9999)
@@ -45,8 +46,9 @@ class CreatePurchaseRequestCommand(BaseModel):
 class CreateSettlementRequestCommand(BaseModel):
     requester_slack_user_id: str
     department_id: str
+    budget_node_id: str
     assignee_slack_user_id: str
-    channel_id: str
+    source_conversation_id: str | None = None
     subject: str = Field(min_length=1, max_length=240)
     vendor: str = Field(min_length=1, max_length=240)
     amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)

@@ -2,7 +2,7 @@ from slack_sdk.models.views import View
 
 from app.application.dashboard import DashboardCapabilities, UserDashboard
 from app.application.work_items import WorkItemAction, build_user_work_queue
-from app.domain.catalog import department_by_id
+from app.domain.catalog import category_for_budget_node, department_by_id
 from app.domain.enums import ApplicantType
 from app.domain.models import ApplicantProfile
 from app.domain.work_requests import (
@@ -74,7 +74,12 @@ def test_work_queue_uses_relationships_instead_of_roles() -> None:
 def test_settlement_adapter_exposes_expense_start_action() -> None:
     department = department_by_id("department_2")
     settlement = work_request_from_created(
-        settlement_created_data(settlement_command(), department)
+        settlement_created_data(
+            settlement_command(),
+            department,
+            category_for_budget_node("supplies", "department_2"),
+            "C_DEPARTMENT_2",
+        )
     )
     queue = build_user_work_queue(
         "U_STUDENT",
@@ -89,7 +94,12 @@ def test_settlement_adapter_exposes_expense_start_action() -> None:
 def test_home_renders_active_and_action_required_queues() -> None:
     department = department_by_id("department_2")
     settlement = work_request_from_created(
-        settlement_created_data(settlement_command(), department)
+        settlement_created_data(
+            settlement_command(),
+            department,
+            category_for_budget_node("supplies", "department_2"),
+            "C_DEPARTMENT_2",
+        )
     )
     queue = build_user_work_queue(
         "U_STUDENT",

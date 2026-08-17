@@ -45,6 +45,15 @@ class BudgetNode:
 
 
 @dataclass(frozen=True)
+class BudgetItemOption:
+    """A selectable budget leaf, independent of its department-specific expense form."""
+
+    id: str
+    path_en: tuple[str, ...]
+    path_ko: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ExpenseForm:
     id: str
     name_en: str
@@ -246,6 +255,15 @@ class ApplicantProfile:
     applicant_identifier: str
 
 
+@dataclass(frozen=True)
+class RequestContext:
+    """Reusable request defaults attached to a Slack conversation, not an approval route."""
+
+    conversation_id: str
+    department_id: str
+    budget_node_id: str
+
+
 @dataclass
 class WorkRequest:
     id: str
@@ -258,6 +276,7 @@ class WorkRequest:
     parent_request_id: str | None
     department_id: str
     channel_id: str
+    source_conversation_id: str | None
     subject: str
     purpose: str
     department: Department
@@ -265,6 +284,11 @@ class WorkRequest:
     workflow_snapshot: list[dict]
     approval_steps: list[ApprovalStep]
     current_step_order: int | None
+    budget_program_id: str | None = None
+    budget_node_id: str | None = None
+    budget_node_path: tuple[str, ...] = ()
+    budget_path_en: tuple[str, ...] = ()
+    budget_path_ko: tuple[str, ...] = ()
     quantity: int | None = None
     amount: Decimal | None = None
     vendor: str | None = None

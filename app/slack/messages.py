@@ -249,6 +249,17 @@ def work_request_blocks(request: WorkRequest, *, include_actions: bool = True) -
         {"type": "mrkdwn", "text": f"*{t('status')}*\n{status}"},
         {"type": "mrkdwn", "text": f"*{t('purchase_subject')}*\n{escape_mrkdwn(request.subject)}"},
     ]
+    if request.budget_path_en or request.budget_path_ko:
+        budget_path = display_name(
+            " / ".join(request.budget_path_en),
+            " / ".join(request.budget_path_ko),
+        )
+        fields.append(
+            {
+                "type": "mrkdwn",
+                "text": f"*{t('budget_execution_item')}*\n{escape_mrkdwn(budget_path)}",
+            }
+        )
     if request.quantity is not None:
         fields.append({"type": "mrkdwn", "text": f"*{t('quantity')}*\n{request.quantity:,}"})
     if request.amount is not None:

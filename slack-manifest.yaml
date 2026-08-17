@@ -13,8 +13,8 @@ features:
   slash_commands:
     - command: /expense
       url: https://kaist-aci-erp.vercel.app/slack/events
-      description: Start a new expense request
-      usage_hint: Open the expense request form
+      description: Start expense work using this conversation's defaults
+      usage_hint: "[purchase | settlement | setup]"
       should_escape: false
 oauth_config:
   scopes:

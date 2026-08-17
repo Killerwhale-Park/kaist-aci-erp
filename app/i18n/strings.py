@@ -16,8 +16,10 @@ STRINGS = {
     "home_new_requests": "New Requests / 새 요청",
     "home_system_settings": "System Configuration / 시스템 설정",
     "home_system_settings_help": (
-        "Manage assignees, operating channels, and approval procedures. / "
-        "담당자, 운영 채널과 승인 절차를 관리합니다."
+        "Manage assignees, operating channels, and approval procedures. Run `/expense setup` "
+        "in a channel or app DM to save its request defaults.\n"
+        "담당자, 운영 채널과 승인 절차를 관리합니다. 채널 또는 앱 DM의 요청 기본값은 그곳에서 "
+        "`/expense setup`을 실행해 저장합니다."
     ),
     "home_open_settings": "Open Settings / 설정 열기",
     "profile_heading": "My Profile / 내 정보",
@@ -60,11 +62,45 @@ STRINGS = {
     "purchase_title": "Purchase / 구매 요청",
     "settlement_title": "Settlement / 정산 요청",
     "send_request": "Send / 보내기",
-    "request_channel": "Request Channel / 요청 채널",
-    "select_channel": "Select Channel / 채널 선택",
-    "work_channel_notice": (
-        "The app must already be a member of the selected private channel. "
-        "구매 요청과 정산 요청은 같은 채널 또는 서로 다른 채널로 보낼 수 있습니다."
+    "request_conversation": "Request Conversation / 요청 대화",
+    "select_conversation": "Select Conversation / 대화 선택",
+    "work_conversation_notice": (
+        "Choose a channel or app DM where the purchase request will be tracked. / "
+        "구매 요청을 함께 확인할 채널 또는 앱 DM을 선택하세요."
+    ),
+    "budget_execution_item": "Budget Item / 예산 집행 항목",
+    "select_budget_execution_item": "Select Budget Item / 예산 항목 선택",
+    "settlement_budget_notice": (
+        "The sender fixes the budget item now. The assignee cannot change it later, and the "
+        "approval destination is resolved automatically.\n"
+        "보내는 사람이 지금 재원 항목을 확정합니다. 담당 학생은 나중에 변경할 수 없으며 "
+        "승인 전달 위치는 자동으로 결정됩니다."
+    ),
+    "assigned_budget_locked": (
+        "This budget item was fixed by the person who assigned the settlement. / "
+        "정산 업무를 배정한 사람이 확정한 항목으로 변경할 수 없습니다."
+    ),
+    "purchase_department_locked": (
+        "The department is inherited from the purchase request. / "
+        "구매 요청의 학과를 그대로 사용합니다."
+    ),
+    "request_context_title": "Context / 요청 기본값",
+    "request_context_notice": (
+        "Save reusable defaults for this channel or app DM. Channel defaults require a system "
+        "administrator; you may manage your own app DM. This does not change the approval "
+        "procedure. Run `/expense setup` here again to update it.\n"
+        "이 채널 또는 앱 DM에서 반복 사용할 기본값입니다. 승인 절차는 바뀌지 않으며, "
+        "채널 기본값은 시스템 관리자가, 개인 앱 DM은 본인이 설정합니다. 변경하려면 여기서 "
+        "`/expense setup`을 다시 실행하세요."
+    ),
+    "request_context_saved": (
+        "Request defaults saved for this conversation. / 이 대화의 요청 기본값을 저장했습니다."
+    ),
+    "settlement_permission_invalid": (
+        "Only professors or administrative staff can assign settlement, and the assignee must "
+        "have the Student Coordinator role.\n"
+        "교수 또는 행정팀만 정산 업무를 배정할 수 있으며, 담당자는 학생 담당자 역할이 "
+        "있어야 합니다."
     ),
     "purchase_assignee": "Buyer / 구매 담당 교수",
     "settlement_assignee": "Student / 정산 담당 학생",

@@ -10,12 +10,14 @@ from app.config.roles import (
 from app.domain.enums import ApplicantType, EvidenceRequirementLevel, EvidenceTiming
 from app.domain.models import (
     ApplicantProfile,
+    BudgetItemOption,
     BudgetNode,
     Department,
     EvidenceRequirementDefinition,
     EvidenceSubmission,
     ExpenseCategory,
     ExpenseRequest,
+    RequestContext,
     WorkRequest,
 )
 from app.i18n import display_name, t
@@ -31,15 +33,29 @@ def _option(value: str, name_en: str, name_ko: str) -> dict:
 
 
 def _category_option(category: ExpenseCategory) -> dict:
-    name_en = " / ".join(category.budget_path_en) or category.name_en
-    name_ko = " / ".join(category.budget_path_ko) or category.name_ko
-    return {
+    path_en = category.budget_path_en or (category.name_en,)
+    path_ko = category.budget_path_ko or (category.name_ko,)
+    return _path_option(category.id, path_en, path_ko)
+
+
+def _budget_item_option(item: BudgetItemOption) -> dict:
+    return _path_option(item.id, item.path_en, item.path_ko)
+
+
+def _path_option(value: str, path_en: tuple[str, ...], path_ko: tuple[str, ...]) -> dict:
+    option = {
         "text": {
             "type": "plain_text",
-            "text": display_name(name_en, name_ko)[:75],
+            "text": display_name(path_en[-1], path_ko[-1])[:75],
         },
-        "value": category.id,
+        "value": value,
     }
+    if len(path_en) > 1 or len(path_ko) > 1:
+        option["description"] = {
+            "type": "plain_text",
+            "text": display_name(" › ".join(path_en[:-1]), " › ".join(path_ko[:-1]))[:75],
+        }
+    return option
 
 
 def _budget_selection_blocks(
@@ -106,8 +122,11 @@ def expense_context_modal(
     initial_department_id: str | None = None,
     source_work_request_id: str | None = None,
     selected_budget_node_ids: tuple[str, ...] = (),
+    selection_locked: bool = False,
 ) -> dict:
-    department_options = [_option(item.id, item.name_en, item.name_ko) for item in departments]
+    department_list = list(departments)
+    node_list = list(budget_nodes)
+    department_options = [_option(item.id, item.name_en, item.name_ko) for item in department_list]
     department_element: dict = {
         "type": "static_select",
         "action_id": "value",
@@ -119,7 +138,7 @@ def expense_context_modal(
     if initial_department is not None:
         department_element["initial_option"] = initial_department
     budget_blocks, _selected_leaf = _budget_selection_blocks(
-        budget_nodes, set(category_node_ids), selected_budget_node_ids
+        node_list, set(category_node_ids), selected_budget_node_ids
     )
     applicant_kind = t(
         "student" if profile.applicant_type == ApplicantType.STUDENT else "professor"
@@ -139,6 +158,14 @@ def expense_context_modal(
                     if source_work_request_id
                     else {}
                 ),
+                **(
+                    {
+                        "locked_department_id": initial_department_id,
+                        "locked_budget_node_ids": list(selected_budget_node_ids),
+                    }
+                    if selection_locked
+                    else {}
+                ),
             }
         ),
         "title": {"type": "plain_text", "text": t("new_request_short")},
@@ -156,16 +183,62 @@ def expense_context_modal(
                     ),
                 },
             },
-            {
-                "type": "input",
-                "block_id": "department",
-                "label": {"type": "plain_text", "text": t("department")},
-                "element": department_element,
-            },
-            *budget_blocks,
+            *(
+                _locked_budget_context_blocks(
+                    department_list,
+                    node_list,
+                    initial_department_id,
+                    selected_budget_node_ids,
+                )
+                if selection_locked
+                else [
+                    {
+                        "type": "input",
+                        "block_id": "department",
+                        "label": {"type": "plain_text", "text": t("department")},
+                        "element": department_element,
+                    },
+                    *budget_blocks,
+                ]
+            ),
         ],
     }
     return view
+
+
+def _locked_budget_context_blocks(
+    departments: list[Department],
+    nodes: list[BudgetNode],
+    department_id: str | None,
+    selected_node_ids: tuple[str, ...],
+) -> list[dict]:
+    department = next((item for item in departments if item.id == department_id), None)
+    node_by_id = {item.id: item for item in nodes}
+    selected_nodes = [node_by_id[item_id] for item_id in selected_node_ids if item_id in node_by_id]
+    department_name = (
+        display_name(department.name_en, department.name_ko) if department else t("unassigned")
+    )
+    budget_name = (
+        display_name(
+            " / ".join(item.name_en for item in selected_nodes),
+            " / ".join(item.name_ko for item in selected_nodes),
+        )
+        if selected_nodes
+        else t("unassigned")
+    )
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*{t('department')}*\n{department_name}\n\n"
+                    f"*{t('budget_execution_item')}*\n{budget_name}\n\n"
+                    f"_{t('assigned_budget_locked')}_"
+                ),
+            },
+        }
+    ]
 
 
 def applicant_profile_modal(
@@ -233,39 +306,58 @@ def applicant_profile_modal(
     }
 
 
-def _work_request_base_blocks(departments: Iterable[Department]) -> list[dict]:
+def _department_input(
+    departments: Iterable[Department], initial_department_id: str | None = None
+) -> dict:
+    options = [_option(item.id, item.name_en, item.name_ko) for item in departments]
+    element: dict = {
+        "type": "static_select",
+        "action_id": "value",
+        "options": options,
+    }
+    initial = next((item for item in options if item["value"] == initial_department_id), None)
+    if initial:
+        element["initial_option"] = initial
+    return {
+        "type": "input",
+        "block_id": "work_department",
+        "label": {"type": "plain_text", "text": t("department")},
+        "element": element,
+    }
+
+
+def _work_channel_input(initial_conversation_id: str | None = None) -> list[dict]:
+    element: dict = {
+        "type": "conversations_select",
+        "action_id": "value",
+        "placeholder": {"type": "plain_text", "text": t("select_conversation")},
+        "filter": {"include": ["im", "mpim", "private", "public"]},
+    }
+    if initial_conversation_id:
+        element["initial_conversation"] = initial_conversation_id
     return [
         {
             "type": "input",
-            "block_id": "work_department",
-            "label": {"type": "plain_text", "text": t("department")},
-            "element": {
-                "type": "static_select",
-                "action_id": "value",
-                "options": [_option(item.id, item.name_en, item.name_ko) for item in departments],
-            },
-        },
-        {
-            "type": "input",
             "block_id": "work_channel",
-            "label": {"type": "plain_text", "text": t("request_channel")},
-            "element": {
-                "type": "conversations_select",
-                "action_id": "value",
-                "placeholder": {"type": "plain_text", "text": t("select_channel")},
-                "filter": {"include": ["private"]},
-            },
+            "label": {"type": "plain_text", "text": t("request_conversation")},
+            "element": element,
         },
         {
             "type": "context",
-            "elements": [{"type": "mrkdwn", "text": t("work_channel_notice")}],
+            "elements": [{"type": "mrkdwn", "text": t("work_conversation_notice")}],
         },
     ]
 
 
-def purchase_request_modal(departments: Iterable[Department]) -> dict:
-    blocks = _work_request_base_blocks(departments)
-    blocks[1:1] = [
+def purchase_request_modal(
+    departments: Iterable[Department],
+    *,
+    initial_department_id: str | None = None,
+    initial_conversation_id: str | None = None,
+    source_conversation_id: str | None = None,
+) -> dict:
+    blocks = [
+        _department_input(departments, initial_department_id),
         {
             "type": "input",
             "block_id": "purchase_assignee",
@@ -275,7 +367,8 @@ def purchase_request_modal(departments: Iterable[Department]) -> dict:
                 "action_id": "value",
                 "placeholder": {"type": "plain_text", "text": t("select_person")},
             },
-        }
+        },
+        *_work_channel_input(initial_conversation_id),
     ]
     blocks.extend(
         [
@@ -318,18 +411,66 @@ def purchase_request_modal(departments: Iterable[Department]) -> dict:
         "title": {"type": "plain_text", "text": t("purchase_title")},
         "submit": {"type": "plain_text", "text": t("send_request")},
         "close": {"type": "plain_text", "text": t("cancel")},
+        **(
+            {"private_metadata": json.dumps({"source_conversation_id": source_conversation_id})}
+            if source_conversation_id
+            else {}
+        ),
         "blocks": blocks,
     }
 
 
 def settlement_request_modal(
     departments: Iterable[Department],
+    budget_items: Iterable[BudgetItemOption],
     *,
     source_purchase: WorkRequest | None = None,
+    initial_department_id: str | None = None,
+    initial_budget_node_id: str | None = None,
+    source_conversation_id: str | None = None,
 ) -> dict:
     department_list = list(departments)
-    blocks = _work_request_base_blocks(department_list)
-    blocks[1:1] = [
+    category_options = [_budget_item_option(item) for item in budget_items]
+    budget_element: dict = {
+        "type": "static_select",
+        "action_id": "value",
+        "placeholder": {"type": "plain_text", "text": t("select_budget_execution_item")},
+        "options": category_options,
+    }
+    initial_budget = next(
+        (item for item in category_options if item["value"] == initial_budget_node_id), None
+    )
+    if initial_budget:
+        budget_element["initial_option"] = initial_budget
+    selected_department_id = (
+        source_purchase.department_id if source_purchase is not None else initial_department_id
+    )
+    selected_department = next(
+        (item for item in department_list if item.id == selected_department_id), None
+    )
+    department_block = (
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*{t('department')}*\n"
+                    f"{display_name(selected_department.name_en, selected_department.name_ko)}\n"
+                    f"_{t('purchase_department_locked')}_"
+                ),
+            },
+        }
+        if source_purchase is not None and selected_department is not None
+        else _department_input(department_list, selected_department_id)
+    )
+    blocks = [
+        department_block,
+        {
+            "type": "input",
+            "block_id": "work_budget_item",
+            "label": {"type": "plain_text", "text": t("budget_execution_item")},
+            "element": budget_element,
+        },
         {
             "type": "input",
             "block_id": "settlement_assignee",
@@ -339,7 +480,11 @@ def settlement_request_modal(
                 "action_id": "value",
                 "placeholder": {"type": "plain_text", "text": t("select_student")},
             },
-        }
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": t("settlement_budget_notice")}],
+        },
     ]
     blocks.extend(
         [
@@ -383,17 +528,6 @@ def settlement_request_modal(
         ]
     )
     if source_purchase is not None:
-        selected_department = next(
-            (item for item in department_list if item.id == source_purchase.department_id),
-            None,
-        )
-        if selected_department is not None:
-            blocks[0]["element"]["initial_option"] = _option(
-                selected_department.id,
-                selected_department.name_en,
-                selected_department.name_ko,
-            )
-        blocks[2]["element"]["initial_conversation"] = source_purchase.channel_id
         initial_values = {
             "work_subject": source_purchase.subject,
             "work_amount": (
@@ -416,11 +550,74 @@ def settlement_request_modal(
         "submit": {"type": "plain_text", "text": t("send_request")},
         "close": {"type": "plain_text", "text": t("cancel")},
         **(
-            {"private_metadata": json.dumps({"source_request_id": source_purchase.id})}
-            if source_purchase is not None
+            {
+                "private_metadata": json.dumps(
+                    {
+                        **(
+                            {
+                                "source_request_id": source_purchase.id,
+                                "source_department_id": source_purchase.department_id,
+                            }
+                            if source_purchase is not None
+                            else {}
+                        ),
+                        **(
+                            {"source_conversation_id": source_conversation_id}
+                            if source_conversation_id
+                            else {}
+                        ),
+                    }
+                )
+            }
+            if source_purchase is not None or source_conversation_id
             else {}
         ),
         "blocks": blocks,
+    }
+
+
+def request_context_modal(
+    conversation_id: str,
+    departments: Iterable[Department],
+    budget_items: Iterable[BudgetItemOption],
+    current: RequestContext | None = None,
+) -> dict:
+    category_options = [_budget_item_option(item) for item in budget_items]
+    budget_element: dict = {
+        "type": "static_select",
+        "action_id": "value",
+        "placeholder": {"type": "plain_text", "text": t("select_budget_execution_item")},
+        "options": category_options,
+    }
+    if current:
+        initial = next(
+            (item for item in category_options if item["value"] == current.budget_node_id), None
+        )
+        if initial:
+            budget_element["initial_option"] = initial
+    return {
+        "type": "modal",
+        "callback_id": "request_context_configure",
+        "private_metadata": json.dumps({"conversation_id": conversation_id}),
+        "title": {"type": "plain_text", "text": t("request_context_title")},
+        "submit": {"type": "plain_text", "text": t("save")},
+        "close": {"type": "plain_text", "text": t("cancel")},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": t("request_context_notice")},
+            },
+            _department_input(
+                departments,
+                current.department_id if current else None,
+            ),
+            {
+                "type": "input",
+                "block_id": "work_budget_item",
+                "label": {"type": "plain_text", "text": t("budget_execution_item")},
+                "element": budget_element,
+            },
+        ],
     }
 
 

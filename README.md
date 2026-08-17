@@ -18,6 +18,8 @@ FastAPI + Slack Bolt
    ↓
 Application work queue + lifecycle adapters
    ↓
+Conversation defaults → fixed budget snapshot
+   ↓
 N-step approval workflow / validation
    ↓
 SQLAlchemy repository
@@ -98,7 +100,16 @@ https://kaist-aci-erp.vercel.app/slack/events
 정산 양식은 항상 열 수 있지만, 최종 제출에는 선택한 재원 항목의 승인 절차가
 필요합니다. 받은 승인·구매·정산 업무는 `내가 받은 요청·할 일`에 모입니다.
 
-신청·승인 권한은 `전역 Role ∩ 해당 운영 채널 멤버`로 계산되며 요청 제출 시점에 고정됩니다.
+정산 업무를 보낼 때 재원 항목을 확정하며 담당 학생은 이를 변경할 수 없습니다. 승인
+채널과 증빙 양식은 확정된 재원 설정에서 자동으로 해석됩니다.
+
+반복 입력을 줄이려면 사용할 채널 또는 앱 DM에서 관리자가 `/expense setup`을 실행해
+학과·기본 재원을 한 번 저장합니다. 이후 `/expense`는 직접 정산, `/expense purchase`는
+구매 요청, `/expense settlement`는 정산 업무 배정을 해당 기본값으로 시작합니다. 이 Context는
+입력 기본값일 뿐 승인 경로를 변경하지 않습니다.
+
+역할 기반 승인자는 `전역 Role ∩ 승인 채널 멤버`, 요청에서 명시적으로 지정된 담당자는
+`전역 Role`로 검증됩니다. 따라서 명시적 담당자는 DM에서 받은 승인 요청도 처리할 수 있습니다.
 
 ## 로컬 개발
 

@@ -138,6 +138,7 @@ def register_profile_handlers(slack_app, runtime: SlackRuntime) -> None:
                         selected_budget_node_ids=tuple(
                             metadata.get("selected_budget_node_ids") or ()
                         ),
+                        selection_locked=bool(metadata.get("selection_locked")),
                     )
                 else:
                     view = configuration_notice_modal(t("profile_saved"))

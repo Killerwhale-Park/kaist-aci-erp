@@ -5,9 +5,13 @@ from datetime import date
 import pytest
 from sqlalchemy import event
 
-from app.domain.catalog import department_by_id
+from app.application.request_contexts import (
+    ConfigureRequestContextCommand,
+    RequestContextService,
+)
+from app.domain.catalog import category_for_budget_node, department_by_id
 from app.domain.enums import ApplicantType, RequestStatus, WorkRequestKind, WorkRequestStatus
-from app.domain.work_requests import settlement_created_data
+from app.domain.work_requests import WORK_APPROVAL_STEP_APPROVED, settlement_created_data
 from app.i18n import t
 from app.ledger.repository import LedgerRepository
 from app.slack.handlers import register_handlers
@@ -50,6 +54,162 @@ def registered_handlers(database) -> RegisteredHandlers:
     handlers = RegisteredHandlers()
     register_handlers(handlers, database)
     return handlers
+
+
+@pytest.mark.asyncio
+async def test_slash_command_reuses_conversation_request_context(slack_client, database) -> None:
+    ledger = LedgerRepository(slack_client, database)
+    await RequestContextService(ledger).configure(
+        ConfigureRequestContextCommand(
+            actor_slack_user_id=ROOT_ADMIN,
+            conversation_id="C_WORK",
+            department_id="department_1",
+            budget_node_id="supplies",
+        )
+    )
+    await ledger.save_applicant_profile(
+        "U_REQUESTER",
+        applicant_type=ApplicantType.STUDENT,
+        applicant_identifier="202600001",
+    )
+    handlers = registered_handlers(database)
+
+    async def ack(**_kwargs) -> None:
+        return None
+
+    await handlers.commands["/expense"](
+        ack,
+        {
+            "text": "",
+            "channel_id": "C_WORK",
+            "user_id": "U_REQUESTER",
+            "trigger_id": "TRIGGER_CONTEXT",
+        },
+        slack_client,
+    )
+
+    view = slack_client.opened_views["V1"]
+    assert view["callback_id"] == "expense_context"
+    department = next(block for block in view["blocks"] if block.get("block_id") == "department")
+    assert department["element"]["initial_option"]["value"] == "department_1"
+    selected_budget_path = [
+        block["element"]["initial_option"]["value"]
+        for block in view["blocks"]
+        if block.get("block_id", "").startswith("budget_level_")
+    ]
+    assert selected_budget_path == [
+        "department_budget",
+        "academic_development",
+        "supplies",
+    ]
+
+    await handlers.commands["/expense"](
+        ack,
+        {
+            "text": "setup",
+            "channel_id": "C_WORK",
+            "user_id": ROOT_ADMIN,
+            "trigger_id": "TRIGGER_SETUP",
+        },
+        slack_client,
+    )
+    setup = slack_client.opened_views["V2"]
+    assert setup["callback_id"] == "request_context_configure"
+    assert setup["private_metadata"] == json.dumps({"conversation_id": "C_WORK"})
+
+
+@pytest.mark.asyncio
+async def test_purchase_command_reuses_personal_dm_context(slack_client, database) -> None:
+    ledger = LedgerRepository(slack_client, database)
+    await ledger.replace_role_assignments(ROOT_ADMIN, role_configuration())
+    await RequestContextService(ledger).configure(
+        ConfigureRequestContextCommand(
+            actor_slack_user_id="U_REQUESTER",
+            conversation_id="D_APP",
+            department_id="department_1",
+            budget_node_id="supplies",
+        )
+    )
+    handlers = registered_handlers(database)
+
+    async def ack(**_kwargs) -> None:
+        return None
+
+    await handlers.commands["/expense"](
+        ack,
+        {
+            "text": "purchase",
+            "channel_id": "D_APP",
+            "user_id": "U_REQUESTER",
+            "trigger_id": "TRIGGER_DM_PURCHASE",
+        },
+        slack_client,
+    )
+    modal = slack_client.opened_views["V1"]
+    assert modal["callback_id"] == "purchase_request_create"
+    assert json.loads(modal["private_metadata"])["source_conversation_id"] == "D_APP"
+    channel = next(block for block in modal["blocks"] if block.get("block_id") == "work_channel")
+    assert channel["element"]["initial_conversation"] == "D_APP"
+
+    def plain(value: str) -> dict:
+        return {"value": {"type": "plain_text_input", "value": value}}
+
+    def selected(value: str, element_type: str) -> dict:
+        key = {
+            "users_select": "selected_user",
+            "conversations_select": "selected_conversation",
+        }.get(element_type, "selected_option")
+        element = {"type": element_type}
+        element[key] = {"value": value} if key == "selected_option" else value
+        return {"value": element}
+
+    await handlers.views["purchase_request_create"](
+        ack,
+        {
+            "user": {"id": "U_REQUESTER"},
+            "view": {
+                "id": "V1",
+                "private_metadata": modal["private_metadata"],
+                "state": {
+                    "values": {
+                        "work_department": selected("department_1", "static_select"),
+                        "purchase_assignee": selected("U_PROFESSOR", "users_select"),
+                        "work_channel": selected("D_APP", "conversations_select"),
+                        "item_name": plain("Keyboard"),
+                        "product_url": plain("https://example.com/keyboard"),
+                        "quantity": plain("1"),
+                        "estimated_amount": plain("50000"),
+                        "work_purpose": plain("DM context purchase"),
+                    }
+                },
+            },
+        },
+        slack_client,
+    )
+
+    created = (await ledger.list_active_work_for_user("U_REQUESTER"))[0]
+    assert created.channel_id == "D_APP"
+    assert created.source_conversation_id == "D_APP"
+
+    await ledger.append_work_event(
+        created.id,
+        WORK_APPROVAL_STEP_APPROVED,
+        "U_PROFESSOR",
+    )
+    await handlers.actions["handoff_purchase_to_settlement"](
+        ack,
+        {
+            "trigger_id": "TRIGGER_DM_HANDOFF",
+            "user": {"id": "U_PROFESSOR"},
+            "actions": [{"value": created.id}],
+        },
+        slack_client,
+    )
+    handoff = slack_client.opened_views["V2"]
+    budget = next(
+        block for block in handoff["blocks"] if block.get("block_id") == "work_budget_item"
+    )
+    assert budget["element"]["initial_option"]["value"] == "supplies"
 
 
 @pytest.mark.asyncio
@@ -151,9 +311,11 @@ async def test_received_settlement_is_listed_and_can_start_after_loading_view(
     command = settlement_command().model_copy(
         update={
             "requester_slack_user_id": "U_OTHER_PROFESSOR",
-            "assignee_slack_user_id": "U_OTHER_STUDENT",
+            "assignee_slack_user_id": "U_COORDINATOR",
+            "department_id": "department_1",
         }
     )
+    await ledger.save_approval_route(ROOT_ADMIN, "department_1", "supplies", "C_APPROVAL")
     await ledger.save_applicant_profile(
         command.assignee_slack_user_id,
         applicant_type=ApplicantType.STUDENT,
@@ -197,10 +359,10 @@ async def test_received_settlement_is_listed_and_can_start_after_loading_view(
                 "state": {
                     "values": {
                         "work_department": selected(command.department_id, "static_select"),
+                        "work_budget_item": selected(command.budget_node_id, "static_select"),
                         "settlement_assignee": selected(
                             command.assignee_slack_user_id, "users_select"
                         ),
-                        "work_channel": selected(command.channel_id, "conversations_select"),
                         "work_subject": plain(command.subject),
                         "work_vendor": plain(command.vendor),
                         "work_amount": plain(str(command.amount)),
@@ -259,6 +421,8 @@ async def test_received_settlement_is_listed_and_can_start_after_loading_view(
     assert slack_client.call_order[:2] == ["ack", "views_open"]
     assert slack_client.opened_views["V2"]["callback_id"] == "expense_context"
     assert "source_work_request_id" in slack_client.opened_views["V2"]["private_metadata"]
+    assert "locked_budget_node_ids" in slack_client.opened_views["V2"]["private_metadata"]
+    assert t("assigned_budget_locked") in str(slack_client.opened_views["V2"])
 
 
 @pytest.mark.asyncio
@@ -269,7 +433,12 @@ async def test_related_user_can_view_work_request_without_admin_lookup(
     await register_test_channels(ledger)
     command = settlement_command()
     request = await ledger.create_work_request(
-        settlement_created_data(command, department_by_id(command.department_id))
+        settlement_created_data(
+            command,
+            department_by_id(command.department_id),
+            category_for_budget_node(command.budget_node_id, command.department_id),
+            "C_DEPARTMENT_2",
+        )
     )
     handlers = registered_handlers(database)
 
@@ -302,8 +471,9 @@ async def test_purchase_handlers_approve_handoff_and_reject_without_losing_work(
     ledger = LedgerRepository(slack_client, database)
     await register_test_channels(ledger)
     await ledger.replace_role_assignments(ROOT_ADMIN, role_configuration())
+    await ledger.save_approval_route(ROOT_ADMIN, "department_1", "supplies", "C_APPROVAL")
     await ledger.save_applicant_profile(
-        "U_REQUESTER",
+        "U_COORDINATOR",
         applicant_type=ApplicantType.STUDENT,
         applicant_identifier="202600001",
     )
@@ -386,6 +556,7 @@ async def test_purchase_handlers_approve_handoff_and_reject_without_losing_work(
     )
     handoff = slack_client.opened_views["V1"]
     assert handoff["callback_id"] == "purchase_settlement_handoff"
+    assert not any(block.get("block_id") == "work_department" for block in handoff["blocks"])
     await handlers.views["purchase_settlement_handoff"](
         ack,
         {
@@ -395,9 +566,8 @@ async def test_purchase_handlers_approve_handoff_and_reject_without_losing_work(
                 "private_metadata": handoff["private_metadata"],
                 "state": {
                     "values": {
-                        "work_department": selected("department_1", "static_select"),
-                        "settlement_assignee": selected("U_REQUESTER", "users_select"),
-                        "work_channel": selected("C_APPROVAL", "conversations_select"),
+                        "work_budget_item": selected("supplies", "static_select"),
+                        "settlement_assignee": selected("U_COORDINATOR", "users_select"),
                         "work_subject": plain("USB-C hub"),
                         "work_vendor": plain("Example Store"),
                         "work_amount": plain("49000"),
@@ -419,7 +589,7 @@ async def test_purchase_handlers_approve_handoff_and_reject_without_losing_work(
     )
     purchase = await ledger.get_work_request(purchase.id)
     assert purchase.status == WorkRequestStatus.COMPLETED
-    settlement = (await ledger.list_actionable_work_for_actor("U_REQUESTER"))[0]
+    settlement = (await ledger.list_actionable_work_for_actor("U_COORDINATOR"))[0]
     assert settlement.kind == WorkRequestKind.SETTLEMENT
     assert settlement.parent_request_id == purchase.id
     assert settlement.case_id == purchase.case_id
@@ -428,7 +598,7 @@ async def test_purchase_handlers_approve_handoff_and_reject_without_losing_work(
         ack,
         {
             "trigger_id": "TRIGGER_SETTLEMENT",
-            "user": {"id": "U_REQUESTER"},
+            "user": {"id": "U_COORDINATOR"},
             "actions": [{"value": settlement.id}],
         },
         slack_client,
@@ -942,8 +1112,8 @@ async def test_assigned_settlement_authorizes_expense_without_direct_requester_r
     command = CreateSettlementRequestCommand(
         requester_slack_user_id="U_ADMIN_STAFF",
         department_id="department_1",
+        budget_node_id="supplies",
         assignee_slack_user_id="U_STUDENT",
-        channel_id="C_APPROVAL",
         subject="Assigned expense",
         vendor="Vendor",
         amount="1000",
@@ -952,7 +1122,12 @@ async def test_assigned_settlement_authorizes_expense_without_direct_requester_r
         evidence_folder_url="https://drive.google.com/drive/folders/example",
     )
     source = await ledger.create_work_request(
-        settlement_created_data(command, department_by_id(command.department_id))
+        settlement_created_data(
+            command,
+            department_by_id(command.department_id),
+            category_for_budget_node(command.budget_node_id, command.department_id),
+            "C_APPROVAL",
+        )
     )
     handlers = registered_handlers(database)
     acknowledgements: list[dict] = []

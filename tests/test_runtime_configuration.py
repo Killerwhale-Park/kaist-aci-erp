@@ -2,6 +2,10 @@ import pytest
 from sqlalchemy import func, select
 
 import app.config.roles as role_config
+from app.application.request_contexts import (
+    ConfigureRequestContextCommand,
+    RequestContextService,
+)
 from app.config.roles import (
     ADMIN_STAFF_ROLE,
     ASSIGN_SETTLEMENT,
@@ -81,7 +85,7 @@ async def test_channel_membership_scopes_global_roles(slack_client, database) ->
 
 
 @pytest.mark.asyncio
-async def test_bound_workflow_actor_must_have_role_and_channel_membership(
+async def test_bound_workflow_actor_requires_role_but_not_delivery_channel_membership(
     slack_client, database
 ) -> None:
     ledger = LedgerRepository(slack_client, database)
@@ -97,10 +101,51 @@ async def test_bound_workflow_actor_must_have_role_and_channel_membership(
         "C_APPROVAL",
         actor_bindings={"payment_assignee": {"U_OUTSIDE_PROFESSOR"}},
     )
+    wrong_role = await ledger.resolve_approval_workflow(
+        "purchase_payment_approval",
+        "C_APPROVAL",
+        actor_bindings={"payment_assignee": {"U_REQUESTER"}},
+    )
 
     assert resolved.is_complete
     assert resolved.steps[0].approver_slack_user_ids == ("U_PROFESSOR",)
-    assert not outside.is_complete
+    assert outside.is_complete
+    assert outside.steps[0].approver_slack_user_ids == ("U_OUTSIDE_PROFESSOR",)
+    assert not wrong_role.is_complete
+
+
+@pytest.mark.asyncio
+async def test_request_context_persists_defaults_without_creating_an_approval_route(
+    slack_client, database
+) -> None:
+    ledger = LedgerRepository(slack_client, database)
+    service = RequestContextService(ledger)
+
+    saved = await service.configure(
+        ConfigureRequestContextCommand(
+            actor_slack_user_id=ROOT_ADMIN,
+            conversation_id="C_WORK",
+            department_id="department_1",
+            budget_node_id="supplies",
+        )
+    )
+    loaded = await service.get("C_WORK")
+    approval_rule = await ledger.get_rule("department_1", "supplies")
+
+    assert loaded == saved
+    assert loaded.department_id == "department_1"
+    assert loaded.budget_node_id == "supplies"
+    assert approval_rule.approval_channel_id is None
+
+    with pytest.raises(ApprovalPermissionError):
+        await service.configure(
+            ConfigureRequestContextCommand(
+                actor_slack_user_id="U_REQUESTER",
+                conversation_id="C_WORK",
+                department_id="department_1",
+                budget_node_id="supplies",
+            )
+        )
 
 
 @pytest.mark.asyncio

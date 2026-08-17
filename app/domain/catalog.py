@@ -9,6 +9,7 @@ from app.domain.models import (
     ApprovalWorkflowDefinition,
     ApprovalWorkflowStepDefinition,
     BudgetFormMapping,
+    BudgetItemOption,
     BudgetNode,
     BudgetProgram,
     BudgetWorkflowMapping,
@@ -123,6 +124,21 @@ def budget_form_mappings() -> list[BudgetFormMapping]:
         )
         for item in BUDGET_FORM_MAPPING_SEEDS
     ]
+
+
+def budget_item_options() -> list[BudgetItemOption]:
+    mapped_node_ids = {item.budget_node_id for item in budget_form_mappings()}
+    result: list[BudgetItemOption] = []
+    for node_id in sorted(mapped_node_ids):
+        path = budget_path(node_id)
+        result.append(
+            BudgetItemOption(
+                id=node_id,
+                path_en=tuple(item.name_en for item in path),
+                path_ko=tuple(item.name_ko for item in path),
+            )
+        )
+    return result
 
 
 def resolve_expense_categories(

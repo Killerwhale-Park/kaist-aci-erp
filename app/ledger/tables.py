@@ -134,6 +134,18 @@ class ApplicantProfileRecord(Base):
     )
 
 
+class RequestContextRecord(Base):
+    __tablename__ = "request_contexts"
+
+    conversation_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    department_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    budget_node_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    updated_by_slack_user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
 class ApprovalRouteRecord(Base):
     __tablename__ = "approval_routes"
 

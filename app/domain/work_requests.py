@@ -7,12 +7,13 @@ from typing import Any
 from uuid import uuid4
 
 from app.domain.approval_chain import approve_step, assert_actor_can_approve_step, pending_step
-from app.domain.catalog import department_by_id
+from app.domain.catalog import budget_path, department_by_id
 from app.domain.enums import ApprovalStepStatus, WorkRequestKind, WorkRequestStatus
 from app.domain.models import (
     ApprovalStep,
     ApprovalStepApprover,
     Department,
+    ExpenseCategory,
     ResolvedApprovalWorkflow,
     WorkRequest,
 )
@@ -54,6 +55,7 @@ def purchase_created_data(
         "parent_request_id": None,
         "department_id": department.id,
         "channel_id": command.channel_id,
+        "source_conversation_id": command.source_conversation_id,
         "subject": command.item_name,
         "purpose": command.purpose,
         "quantity": command.quantity,
@@ -70,6 +72,8 @@ def purchase_created_data(
 def settlement_created_data(
     command: CreateSettlementRequestCommand,
     department: Department,
+    category: ExpenseCategory,
+    delivery_channel_id: str,
     *,
     originator_slack_user_id: str | None = None,
     case_id: str | None = None,
@@ -77,6 +81,7 @@ def settlement_created_data(
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
     request_id, reference = _identity(WorkRequestKind.SETTLEMENT, now)
+    selected_path = budget_path(command.budget_node_id)
     return {
         "id": request_id,
         "reference_number": reference,
@@ -87,7 +92,15 @@ def settlement_created_data(
         "case_id": case_id or request_id,
         "parent_request_id": parent_request_id,
         "department_id": department.id,
-        "channel_id": command.channel_id,
+        "channel_id": delivery_channel_id,
+        "source_conversation_id": command.source_conversation_id,
+        "budget_selection": {
+            "budget_program_id": category.budget_program_id,
+            "budget_node_id": command.budget_node_id,
+            "budget_node_path": [item.id for item in selected_path],
+            "budget_path_en": list(category.budget_path_en),
+            "budget_path_ko": list(category.budget_path_ko),
+        },
         "subject": command.subject,
         "purpose": command.purpose,
         "quantity": None,
@@ -122,6 +135,7 @@ def work_request_from_created(data: dict[str, Any]) -> WorkRequest:
     if department is None:
         raise ConfigurationError("Work request department is unavailable")
     workflow = copy.deepcopy(data.get("workflow") or [])
+    budget_selection = copy.deepcopy(data.get("budget_selection") or {})
     steps = [
         ApprovalStep(
             step_order=int(item["step_order"]),
@@ -152,6 +166,7 @@ def work_request_from_created(data: dict[str, Any]) -> WorkRequest:
         parent_request_id=data.get("parent_request_id"),
         department_id=department.id,
         channel_id=data["channel_id"],
+        source_conversation_id=data.get("source_conversation_id"),
         subject=data["subject"],
         purpose=data["purpose"],
         department=department,
@@ -159,6 +174,11 @@ def work_request_from_created(data: dict[str, Any]) -> WorkRequest:
         workflow_snapshot=workflow,
         approval_steps=steps,
         current_step_order=1 if steps else None,
+        budget_program_id=budget_selection.get("budget_program_id"),
+        budget_node_id=budget_selection.get("budget_node_id"),
+        budget_node_path=tuple(budget_selection.get("budget_node_path") or ()),
+        budget_path_en=tuple(budget_selection.get("budget_path_en") or ()),
+        budget_path_ko=tuple(budget_selection.get("budget_path_ko") or ()),
         quantity=int(data["quantity"]) if data.get("quantity") is not None else None,
         amount=Decimal(data["amount"]) if data.get("amount") is not None else None,
         vendor=data.get("vendor"),
@@ -253,7 +273,7 @@ def replay_work_events(events: list[dict[str, Any]], *, message_ts: str | None) 
 
 def work_request_summary(request: WorkRequest) -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "work_request_id": request.id,
         "reference_number": request.reference_number,
         "kind": request.kind.value,
@@ -263,6 +283,9 @@ def work_request_summary(request: WorkRequest) -> dict[str, Any]:
         "case_id": request.case_id,
         "parent_request_id": request.parent_request_id,
         "department_id": request.department_id,
+        "source_conversation_id": request.source_conversation_id,
+        "budget_program_id": request.budget_program_id,
+        "budget_node_id": request.budget_node_id,
         "status": request.status.value,
         "current_step_order": request.current_step_order,
         "current_approver_slack_user_ids": list(request.current_approver_slack_user_ids),
