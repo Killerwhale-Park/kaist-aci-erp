@@ -76,6 +76,12 @@ STRINGS = {
         "보내는 사람이 지금 재원 항목을 확정합니다. 담당 학생은 나중에 변경할 수 없으며 "
         "승인 전달 위치는 자동으로 결정됩니다."
     ),
+    "settlement_budget_missing": (
+        "This legacy settlement assignment has no fixed budget item. Ask the sender to create a "
+        "new assignment; the system will not let the assignee choose it.\n"
+        "이전 방식으로 생성되어 확정된 재원 항목이 없습니다. 담당 학생이 대신 정할 수 없으므로 "
+        "배정자에게 새 정산 업무를 보내달라고 요청하세요."
+    ),
     "assigned_budget_locked": (
         "This budget item was fixed by the person who assigned the settlement. / "
         "정산 업무를 배정한 사람이 확정한 항목으로 변경할 수 없습니다."

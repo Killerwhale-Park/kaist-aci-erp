@@ -1365,7 +1365,10 @@ def register_handlers(slack_app, database: Database) -> None:
             try:
                 ledger = repository(client)
                 request = await ledger.get_work_request(body["actions"][0]["value"])
-                if actor != request.assignee_slack_user_id:
+                if (
+                    request.kind != WorkRequestKind.SETTLEMENT
+                    or actor != request.assignee_slack_user_id
+                ):
                     raise ApprovalPermissionError
                 if request.status not in {
                     WorkRequestStatus.ACTION_REQUIRED,
@@ -1377,6 +1380,9 @@ def register_handlers(slack_app, database: Database) -> None:
                 return
             except InvalidStateTransitionError:
                 await show_modal_result(client, view_id, actor, t("invalid_state"))
+                return
+            if not request.budget_node_id or not request.budget_node_path:
+                await show_modal_result(client, view_id, actor, t("settlement_budget_missing"))
                 return
             profile = await ledger.applicant_profile(actor)
             if profile is None:
@@ -1390,7 +1396,7 @@ def register_handlers(slack_app, database: Database) -> None:
                             "initial_department_id": request.department_id,
                             "source_work_request_id": request.slack_locator,
                             "selected_budget_node_ids": list(request.budget_node_path),
-                            "selection_locked": bool(request.budget_node_id),
+                            "selection_locked": True,
                         },
                     ),
                     actor,
@@ -1407,7 +1413,7 @@ def register_handlers(slack_app, database: Database) -> None:
                     initial_department_id=request.department_id,
                     source_work_request_id=request.slack_locator,
                     selected_budget_node_ids=request.budget_node_path,
-                    selection_locked=bool(request.budget_node_id),
+                    selection_locked=True,
                 ),
                 actor,
             )

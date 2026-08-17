@@ -426,6 +426,42 @@ async def test_received_settlement_is_listed_and_can_start_after_loading_view(
 
 
 @pytest.mark.asyncio
+async def test_legacy_settlement_without_budget_cannot_delegate_choice_to_student(
+    slack_client, database
+) -> None:
+    ledger = LedgerRepository(slack_client, database)
+    await register_test_channels(ledger)
+    command = settlement_command()
+    created_data = settlement_created_data(
+        command,
+        department_by_id(command.department_id),
+        category_for_budget_node(command.budget_node_id, command.department_id),
+        "C_DEPARTMENT_2",
+    )
+    created_data.pop("budget_selection")
+    request = await ledger.create_work_request(created_data)
+    handlers = registered_handlers(database)
+
+    async def ack(**_kwargs) -> None:
+        return None
+
+    await handlers.actions["start_assigned_settlement"](
+        ack,
+        {
+            "trigger_id": "TRIGGER_LEGACY_SETTLEMENT",
+            "user": {"id": command.assignee_slack_user_id},
+            "actions": [{"value": request.id}],
+        },
+        slack_client,
+    )
+
+    result = slack_client.opened_views["V1"]
+    assert result["callback_id"] == "configuration_notice"
+    result_text = result["blocks"][0]["text"]["text"]
+    assert result_text == t("settlement_budget_missing")
+
+
+@pytest.mark.asyncio
 async def test_related_user_can_view_work_request_without_admin_lookup(
     slack_client, database, monkeypatch
 ) -> None:
